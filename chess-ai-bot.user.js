@@ -404,6 +404,14 @@
     // Initialize platform detection
     Platform.init();
 
+    // Initialize Lichess player color once when page loads
+    if (Platform.isLichess?.()) {
+        setTimeout(() => {
+            lichessState.initPlayerColor();
+            console.log('[SF Engine] Lichess: Initialization complete. Ready for analysis.');
+        }, 1500);  // Wait for Lichess to fully load
+    }
+
     // --- EXA SEARCH INTEGRATION ---
     // Exa AI web search for opening lookup, player stats, etc.
     const ExaSearch = {
@@ -757,6 +765,90 @@
         exaSearchEnabled: false,
     };
     const settings = { ...DEFAULT_SETTINGS };
+    
+    // ─── LICHESS COLOR DETECTION (v10.0.23+) ───────────────────────────────────────
+    // Get player color FIRST (white=1, black=2), then only analyze YOUR moves
+    // Same proven logic as Chess.com - prevents analyzing opponent moves
+    const lichessState = {
+        playerColor: null,
+        initialized: false,
+        
+        initPlayerColor: () => {
+            if (lichessState.initialized) return lichessState.playerColor;
+            
+            const board = state.board || Platform.getBoard();
+            if (!board) return null;
+            
+            // Priority 1: chessground orientation (most reliable)
+            try {
+                const cg = Platform.getLichessChessground?.(board);
+                if (cg?.state?.orientation) {
+                    lichessState.playerColor = cg.state.orientation === 'black' ? 2 : 1;
+                    lichessState.initialized = true;
+                    console.log('[SF Engine] Lichess: Player color detected (chessground):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
+                    return lichessState.playerColor;
+                }
+            } catch (e) {}
+            
+            // Priority 2: Lichess API
+            try {
+                const color = window.lichess?.data?.player?.color || window.lichess?.round?.data?.player?.color;
+                if (color) {
+                    lichessState.playerColor = color === 'black' ? 2 : 1;
+                    lichessState.initialized = true;
+                    console.log('[SF Engine] Lichess: Player color detected (API):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
+                    return lichessState.playerColor;
+                }
+            } catch (e) {}
+            
+            // Priority 3: Board dataset
+            try {
+                if (board.dataset?.orientation === 'black') {
+                    lichessState.playerColor = 2;
+                } else {
+                    lichessState.playerColor = 1;
+                }
+                lichessState.initialized = true;
+                console.log('[SF Engine] Lichess: Player color detected (dataset):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
+                return lichessState.playerColor;
+            } catch (e) {}
+            
+            // Fallback: assume white
+            lichessState.playerColor = 1;
+            lichessState.initialized = true;
+            console.log('[SF Engine] Lichess: Player color assumed: WHITE');
+            return 1;
+        },
+        
+        getTurnColor: (board) => {
+            // Get whose turn it is (1=white, 2=black)
+            try {
+                const cg = Platform.getLichessChessground?.(board);
+                if (cg?.state?.turnColor) {
+                    return cg.state.turnColor === 'white' ? 1 : 2;
+                }
+            } catch (e) {}
+            
+            // Fallback: extract from FEN
+            try {
+                const fen = Platform.getFEN?.(board);
+                if (fen) {
+                    const parts = fen.split(/\s+/);
+                    return parts[1] === 'w' ? 1 : 2;
+                }
+            } catch (e) {}
+            
+            return 1;  // Default white
+        },
+        
+        isYourTurn: (board) => {
+            if (!lichessState.initialized) {
+                lichessState.initPlayerColor();
+            }
+            const turn = lichessState.getTurnColor(board);
+            return lichessState.playerColor === turn;
+        }
+    };
     // --- COLOR HELPERS ---
     const hexToRgb = (hex) => {
         const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -2538,6 +2630,17 @@ self.onmessage = function(e) {
     function analyze(depth = settings.depth, fenOverride = null, isRetry = !1) {
         depth = computeSmartDepth(depth);
         if (state.isThinking && !fenOverride && !isRetry) return;
+        
+        // ─── LICHESS FIX: Check player color FIRST (Chess.com style) ───
+        // Only analyze if it's YOUR turn, not opponent's move
+        if (Platform.isLichess?.()) {
+            const board = state.board || Platform.getBoard();
+            if (board && !lichessState.isYourTurn(board)) {
+                console.log('[SF Engine] Lichess: Skipping analysis (opponent\'s turn)');
+                return;  // Skip opponent moves
+            }
+        }
+        
         const wasThinking = state.isThinking;
         let finalFEN = fenOverride || sanitizeFEN(getRawBoardFEN());
         if (!finalFEN) return;
