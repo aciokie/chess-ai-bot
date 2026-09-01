@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version       11.0.2
+// @version       11.0.3
 // @description   Stable branch from the working original script, with Lichess platform support and the fixed worker bootstrap.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -219,36 +219,26 @@
         },
 
         getLichessPlayerColor: (board) => {
-            // Priority 1: Lichess API (most reliable)
+            // 1. Get player color from Lichess API (GROUND TRUTH)
             const apiColor = window.lichess?.data?.player?.color 
                           || window.lichess?.round?.data?.player?.color 
                           || window.lichess?.round?.data?.playerColor
                           || window.lichess?.game?.data?.player?.color;
-            console.log('[SF Engine] Lichess: Priority 1 (API) color:', apiColor);
-            if (apiColor === 'white' || apiColor === 'w') return 1;
-            if (apiColor === 'black' || apiColor === 'b') return 2;
+            console.log('[SF Engine] Lichess: API player color:', apiColor);
             
-            // Priority 2: chessground orientation (which color at bottom = player color)
+            let playerColor = null;
+            if (apiColor === 'white' || apiColor === 'w') playerColor = 1;
+            else if (apiColor === 'black' || apiColor === 'b') playerColor = 2;
+            
+            // 2. Cross-check with chessground orientation for sanity
             const cg = Platform.getLichessChessground(board);
-            if (cg?.state?.orientation) {
-                const result = cg.state.orientation === 'white' ? 1 : 2;
-                console.log('[SF Engine] Lichess: Priority 2 (chessground orientation):', cg.state.orientation, '->', result === 1 ? 'WHITE' : 'BLACK');
-                return result;
-            }
-            
-            // Priority 3: Board dataset orientation
-            const ds = board?.dataset?.orientation;
-            console.log('[SF Engine] Lichess: Priority 3 (dataset) orientation:', ds);
-            if (ds === 'white') return 1;
-            if (ds === 'black') return 2;
-            
-            // Priority 4: DOM class (orientation-black means black at bottom = player is black)
-            const oriented = board?.closest?.('.orientation-black');
-            console.log('[SF Engine] Lichess: Priority 4 (DOM class .orientation-black):', oriented ? 'found' : 'not found');
-            if (oriented) return 2;
-            
-            // Priority 5: Check piece positions on rank 1
-            try {
+            if (cg?.state?.orientation && playerColor !== null) {
+                const boardOrientation = cg.state.orientation; // 'white' or 'black' - color at bottom
+                const isFlipped = (playerColor === 1 && boardOrientation === 'black') || 
+                                  (playerColor === 2 && boardOrientation === 'white');
+                console.log('[SF Engine] Lichess: Board orientation:', boardOrientation, '| Player:', playerColor === 1 ? 'WHITE' : 'BLACK', '| Flipped:', isFlipped);
+                
+                // If board pieces visually confirm
                 if (cg?.state?.pieces) {
                     let blackOnRank1 = false;
                     for (const [key, piece] of Object.entries(cg.state.pieces)) {
@@ -257,14 +247,36 @@
                             break;
                         }
                     }
-                    const result = blackOnRank1 ? 2 : 1;
-                    console.log('[SF Engine] Lichess: Priority 5 (visual pieces rank1): blackOnRank1=', blackOnRank1, '->', result === 1 ? 'WHITE' : 'BLACK');
-                    return result;
+                    const visualColor = blackOnRank1 ? 2 : 1;
+                    const visualMatches = visualColor === playerColor;
+                    console.log('[SF Engine] Lichess: Visual check - blackOnRank1:', blackOnRank1, '->', visualColor === 1 ? 'WHITE' : 'BLACK', '| Matches API:', visualMatches);
+                    
+                    // If visual contradicts API, log warning but trust API (server knows your color)
+                    if (!visualMatches) {
+                        console.warn('[SF Engine] Lichess: Visual pieces contradict API! Trusting API.');
+                    }
                 }
-            } catch (e) {}
+            }
             
-            console.warn('[SF Engine] Lichess: All detection priorities failed');
-            return null; // Don't assume - let caller handle
+            // 3. Fallback: if no API, try to infer from orientation + visual
+            if (playerColor === null && cg?.state?.orientation) {
+                // This is unreliable without API - orientation could be flipped by user preference
+                console.warn('[SF Engine] Lichess: No API color, orientation-only detection is unreliable');
+                // Try visual pieces as last resort
+                if (cg?.state?.pieces) {
+                    let blackOnRank1 = false;
+                    for (const [key, piece] of Object.entries(cg.state.pieces)) {
+                        if (key.startsWith('1') && piece.color === 'black') {
+                            blackOnRank1 = true;
+                            break;
+                        }
+                    }
+                    playerColor = blackOnRank1 ? 2 : 1;
+                    console.log('[SF Engine] Lichess: Fallback visual detection:', playerColor === 1 ? 'WHITE' : 'BLACK');
+                }
+            }
+            
+            return playerColor; // Can be null if detection fails
         },
 
         getFEN: (board) => {
