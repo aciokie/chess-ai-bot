@@ -175,9 +175,48 @@
 
         makeMove: (board, move, promotion = 'q') => {
             if (!board) return false;
+            
+            // Chess.com support
             if (Platform.current === 'chess.com' && board.game?.move) {
                 return board.game.move({ ...move, promotion, animate: true, userGenerated: true });
             }
+            
+            // Lichess support via chessground API
+            if (Platform.current === 'lichess') {
+                const cg = Platform.getLichessChessground(board);
+                if (!cg) return false;
+                
+                // Construct the move notation (e.g., "e2e4q" for promotion)
+                const moveNotation = promotion 
+                    ? `${move.from}${move.to}${promotion}` 
+                    : `${move.from}${move.to}`;
+                
+                // Use chessground's move API
+                if (typeof cg.move === 'function') {
+                    cg.move(move.from, move.to);
+                }
+                
+                // For promotion moves, send promotion piece
+                if (typeof cg.promote === 'function' && promotion) {
+                    cg.promote(promotion);
+                }
+                
+                // Trigger send move if available
+                if (typeof cg.send === 'function') {
+                    cg.send('move', { from: move.from, to: move.to, promotion });
+                }
+                
+                // Alternative: use socket if available (for live updates)
+                if (window.lichess?.socket?.send) {
+                    window.lichess.socket.send('move', { 
+                        move: moveNotation, 
+                        blur: false 
+                    });
+                }
+                
+                return true;
+            }
+            
             return false;
         },
 
@@ -204,6 +243,43 @@
                 if (candidate === 'black' || candidate === 'b') return 2;
             }
             return 1;
+        },
+
+        // NEW: Lichess-specific move highlighting via chessground
+        highlightMovesOnLichess: (board, moves) => {
+            if (Platform.current !== 'lichess' || !moves || !board) return;
+            
+            const cg = Platform.getLichessChessground(board);
+            if (!cg) return;
+            
+            try {
+                // Highlight the best move (first move in list)
+                if (moves.length > 0 && typeof cg.setShapes === 'function') {
+                    const bestMove = moves[0];
+                    const shapes = [
+                        {
+                            orig: bestMove.from,
+                            dest: bestMove.to,
+                            brush: 'green'  // Green arrow for best move
+                        }
+                    ];
+                    
+                    // Alternative: blue for secondary options
+                    if (moves.length > 1 && typeof cg.setShapes === 'function') {
+                        for (let i = 1; i < Math.min(moves.length, 4); i++) {
+                            shapes.push({
+                                orig: moves[i].from,
+                                dest: moves[i].to,
+                                brush: 'blue'
+                            });
+                        }
+                    }
+                    
+                    cg.setShapes(shapes);
+                }
+            } catch (err) {
+                ErrorReporter.capture('lichess_highlight', err);
+            }
         }
     };
 
