@@ -224,22 +224,27 @@
                           || window.lichess?.round?.data?.player?.color 
                           || window.lichess?.round?.data?.playerColor
                           || window.lichess?.game?.data?.player?.color;
+            console.log('[SF Engine] Lichess: Priority 1 (API) color:', apiColor);
             if (apiColor === 'white' || apiColor === 'w') return 1;
             if (apiColor === 'black' || apiColor === 'b') return 2;
             
             // Priority 2: chessground orientation (which color at bottom = player color)
             const cg = Platform.getLichessChessground(board);
             if (cg?.state?.orientation) {
-                return cg.state.orientation === 'white' ? 1 : 2;
+                const result = cg.state.orientation === 'white' ? 1 : 2;
+                console.log('[SF Engine] Lichess: Priority 2 (chessground orientation):', cg.state.orientation, '->', result === 1 ? 'WHITE' : 'BLACK');
+                return result;
             }
             
             // Priority 3: Board dataset orientation
             const ds = board?.dataset?.orientation;
+            console.log('[SF Engine] Lichess: Priority 3 (dataset) orientation:', ds);
             if (ds === 'white') return 1;
             if (ds === 'black') return 2;
             
             // Priority 4: DOM class (orientation-black means black at bottom = player is black)
             const oriented = board?.closest?.('.orientation-black');
+            console.log('[SF Engine] Lichess: Priority 4 (DOM class .orientation-black):', oriented ? 'found' : 'not found');
             if (oriented) return 2;
             
             // Priority 5: Check piece positions on rank 1
@@ -252,10 +257,13 @@
                             break;
                         }
                     }
-                    return blackOnRank1 ? 2 : 1;
+                    const result = blackOnRank1 ? 2 : 1;
+                    console.log('[SF Engine] Lichess: Priority 5 (visual pieces rank1): blackOnRank1=', blackOnRank1, '->', result === 1 ? 'WHITE' : 'BLACK');
+                    return result;
                 }
             } catch (e) {}
             
+            console.warn('[SF Engine] Lichess: All detection priorities failed');
             return null; // Don't assume - let caller handle
         },
 
