@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version       11.0.5
+// @version       11.0.6
 // @description   Stable branch from the working original script, with Lichess platform support and the fixed worker bootstrap.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -5072,46 +5072,57 @@ pvSettings: document.getElementById("pvSettings"),
         }
 
         if (state.board && settings.autoRun && raw) {
-            if (state.lastSeenFEN && clean !== state.lastSeenFEN) {
-                state.currentBestMove = null;
-                state.currentMateNorm = null;
-                state.localEval = null;
-                state.localMate = null;
-                state.localPV = null;
-                state.currentPV = [];
-                if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
-                if (settings.hideAfterMove) {
-                try {
-                    Visuals.removeByType('history'); Visuals.removeByType('analysis'); PV.clear();
-                    // Reset threat highlight and eval bar on new board
-                    ThreatDetector.clear();
-                    EvalBar._lastPlayingAs = null;
-                    EvalBar.reset();
-                } catch (e) { console.error(`[SF Engine] overlay cleanup failed:`, e); }
-                } else if (settings.showEvalBar) {
-                    EvalBar.reset();
+            const isFirstLoad = !state.lastSeenFEN;
+            const fenChanged = state.lastSeenFEN && clean !== state.lastSeenFEN;
+            
+            if (isFirstLoad || fenChanged) {
+                if (fenChanged) {
+                    state.currentBestMove = null;
+                    state.currentMateNorm = null;
+                    state.localEval = null;
+                    state.localMate = null;
+                    state.localPV = null;
+                    state.currentPV = [];
+                    if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
+                    if (settings.hideAfterMove) {
+                    try {
+                        Visuals.removeByType('history'); Visuals.removeByType('analysis'); PV.clear();
+                        // Reset threat highlight and eval bar on new board
+                        ThreatDetector.clear();
+                        EvalBar._lastPlayingAs = null;
+                        EvalBar.reset();
+                    } catch (e) { console.error(`[SF Engine] overlay cleanup failed:`, e); }
+                    } else if (settings.showEvalBar) {
+                        EvalBar.reset();
+                    }
                 }
-            }
-            state.lastSeenFEN = clean;
-            const tn = Platform.getTurn(state.board);
-            const pn = Platform.getPlayingAs(state.board);
-            const isTurn = (tn === 1 || tn === "w" || tn === "white") === (pn === 1 || pn === "w" || pn === "white");
-            if (isTurn && clean !== state.lastSanitizedBoardFEN) {
-                // Lichess needs a deterministic first dispatch; the backup poll
-                // must not be the only thing that eventually starts analysis.
-                const canPause = !Platform.isLichess() && shouldPauseAnalysis();
-                if (!state.pendingAnalysis && !canPause) {
-                    // Brief human-glance delay before analyzing (short for cloud-fast)
-                    const glanceMs = settings.engineMode === "cloud" ? getRandomInt(150, 600) : getRandomInt(400, 1200);
-                    state.pendingAnalysis = setTimeout(() => {
-                        state.pendingAnalysis = null;
-                        try {
-                            analyze(settings.depth);
-                        } catch (e) {
-                            console.error(`[SF Engine] scheduled analyze failed:`, e);
-                            handleError("Analyze failed", e);
-                        }
-                    }, glanceMs);
+                state.lastSeenFEN = clean;
+                
+                // On first load, also init player color for Lichess
+                if (isFirstLoad && Platform.isLichess?.()) {
+                    lichessState.initPlayerColor();
+                }
+                
+                const tn = Platform.getTurn(state.board);
+                const pn = Platform.getPlayingAs(state.board);
+                const isTurn = (tn === 1 || tn === "w" || tn === "white") === (pn === 1 || pn === "w" || pn === "white");
+                if (isTurn && clean !== state.lastSanitizedBoardFEN) {
+                    // Lichess needs a deterministic first dispatch; the backup poll
+                    // must not be the only thing that eventually starts analysis.
+                    const canPause = !Platform.isLichess() && shouldPauseAnalysis();
+                    if (!state.pendingAnalysis && !canPause) {
+                        // Brief human-glance delay before analyzing (short for cloud-fast)
+                        const glanceMs = settings.engineMode === "cloud" ? getRandomInt(150, 600) : getRandomInt(400, 1200);
+                        state.pendingAnalysis = setTimeout(() => {
+                            state.pendingAnalysis = null;
+                            try {
+                                analyze(settings.depth);
+                            } catch (e) {
+                                console.error(`[SF Engine] scheduled analyze failed:`, e);
+                                handleError("Analyze failed", e);
+                            }
+                        }, glanceMs);
+                    }
                 }
             }
         }
