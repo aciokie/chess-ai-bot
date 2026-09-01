@@ -2,7 +2,7 @@
 
 **Real-time Stockfish 18 analysis directly in your browser on Lichess and Chess.com**
 
-![Version](https://img.shields.io/badge/version-10.0.24-green)
+![Version](https://img.shields.io/badge/version-11.0.0-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-Lichess%20|%20Chess.com-critical)
 
@@ -90,7 +90,7 @@ Auto-Run:     ON (starts analyzing as soon as page loads)
 ## 🐛 Troubleshooting
 
 ### "No update found" in Tampermonkey?
-- Right-click the script → **Check for updates** → should see v10.0.24
+- Right-click the script → **Check for updates** → should see v11.0.0
 - If still not showing:
   1. Click **Update** manually
   2. Restart your browser
@@ -105,7 +105,7 @@ Auto-Run:     ON (starts analyzing as soon as page loads)
    - Browser storage full (clear cache)
 
 ### Analyzing opponent moves (Lichess)?
-- v10.0.24+ fixed this! Update your script
+- v11.0.0+ fixed this! Update your script
 - Should see: `[SF Engine] Lichess: Skipping analysis (opponent's turn)`
 
 ### Engine is slow?
@@ -117,10 +117,11 @@ Auto-Run:     ON (starts analyzing as soon as page loads)
 
 ## 📜 Updates & Version History
 
-### v10.0.24 (Latest - Sept 2026)
+### v11.0.0 (Latest - Sept 2026)
 - **FIXED:** Lichess now only analyzes your moves (50% CPU savings)
 - Added color-first detection (like Chess.com)
 - Critical bug fixes for Lichess platform
+- GitHub sync fixes for proper updates
 
 ### v10.0.23
 - Version bump for update detection

@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version       11.0.0
-// @description   Stable branch from the working original script, with Lichess platform support and the fixed worker bootstrap.
+// @version       9.3.18
+// @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
-// @updateURL     https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js
-// @downloadURL   https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js
+// @updateURL     https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/VUUGY.user.js
+// @downloadURL   https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/VUUGY.user.js
 // @copyright     2025, Ech0
 // @license       MIT
 // @match         https://www.chess.com/play/*
@@ -15,19 +15,15 @@
 // @match         https://www.chess.com/analysis/*
 // @match         https://www.chess.com/puzzles/*
 // @match         https://www.chess.com/daily
-// @match         https://lichess.org/*
-// @match         https://*.lichess.org/*
 // @connect       chess-api.com
 // @connect       stockfish.online
 // @connect       unpkg.com
-// @connect       api.exa.ai
 // @connect       *
 // @grant         GM_getResourceText
 // @grant         GM_getValue
 // @grant         GM_setValue
 // @grant         GM_xmlhttpRequest
 // @grant         GM_info
-// @grant         GM_openInTab
 // @resource      stockfish.js https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.js
 // @run-at        document-idle
 // ==/UserScript==
@@ -35,461 +31,12 @@
     "use strict";
     // --- CONFIGURATION ---
     const CONFIG = {
-        BOARD_SEL: "chess-board, wc-chess-board, cg-board, lichess-board",
+        BOARD_SEL: "chess-board, wc-chess-board",
         LOOP_MS: 50,
         BACKUP_POLL_MIN_MS: 2000,
         BACKUP_POLL_MAX_MS: 5000,
         API: { MAX_DEPTH: 18, MAX_TIME: 100 }
     };
-    
-    // --- PLATFORM DETECTION ---
-    const Platform = {
-        current: null,
-        isChessCom: () => Platform.current === 'chess.com',
-        isLichess: () => Platform.current === 'lichess',
-
-        detect: () => {
-            const hostname = window.location.hostname;
-            if (hostname.includes('chess.com')) return 'chess.com';
-            if (hostname.includes('lichess.org')) return 'lichess';
-            return 'unknown';
-        },
-
-        init: () => {
-            Platform.current = Platform.detect();
-            console.log(`[SF Engine] Platform detected: ${Platform.current}`);
-            return Platform.current;
-        },
-
-        getBoardSelectors: () => {
-            switch (Platform.current) {
-                case 'lichess':
-                    return '.cg-wrap.manipulable cg-board, .cg-wrap.manipulable lichess-board, cg-board, lichess-board';
-                case 'chess.com':
-                default:
-                    return 'chess-board, wc-chess-board';
-            }
-        },
-
-        getBoard: () => document.querySelector(Platform.getBoardSelectors()),
-
-        // Get the chessground instance from a Lichess board element
-        getLichessChessground: (board) => {
-            if (!board) return null;
-            // Lichess stores chessground instance in a WeakMap or directly on the element.
-            // Try the direct attributes first, then the global board reference.
-            const direct = board.chessground || board._chessground || board.__chessground;
-            if (direct) return direct;
-            if (window.domData && typeof window.domData.get === 'function') {
-                const domCg = window.domData.get(board, 'chessground');
-                if (domCg) return domCg;
-            }
-            const fallbackBoard = Platform.getBoard();
-            return fallbackBoard ? (fallbackBoard.chessground || fallbackBoard._chessground || fallbackBoard.__chessground || null) : null;
-        },
-
-        normalizeLichessFEN: (fen, cg) => {
-            if (!fen) return null;
-            const clean = String(fen).trim();
-            const parts = clean.split(/\s+/);
-            if (parts.length >= 6) return clean;
-
-            // Some chessground builds expose only the piece placement portion.
-            // Build a valid full FEN from the actual side-to-move state when needed.
-            const turn = (cg?.state?.turnColor || 'white') === 'white' ? 'w' : 'b';
-            if (parts.length === 1) return `${clean} ${turn} - - 0 1`;
-
-            // Fallback: if the string is already piece + turn but missing trailing fields.
-            if (parts.length >= 2) return `${parts[0]} ${parts[1]} - - 0 1`;
-            return null;
-        },
-
-        getLichessPageFEN: () => {
-            const fenPattern = /^[prnbqkPRNBQK1-8]+(?:\/[prnbqkPRNBQK1-8]+){7}\s+[wb](?:\s+[^\s]+){4,}$/;
-            return Array.from(document.querySelectorAll('input, textarea'))
-                .map(element => element.value || element.textContent || '')
-                .find(value => fenPattern.test(String(value).trim())) || null;
-        },
-
-        getLichessOrientation: (board) => {
-            const wrapper = board?.closest?.('.cg-wrap');
-            return wrapper?.classList.contains('orientation-black') ? 'black' : 'white';
-        },
-
-        getLichessDomFEN: (board) => {
-            const pieces = board?.querySelectorAll?.('piece') || document.querySelectorAll('cg-board piece');
-            if (!pieces.length) return null;
-            const orientation = Platform.getLichessOrientation(board);
-            const placement = Array.from({ length: 8 }, () => Array(8).fill(null));
-            const pieceNames = { pawn: 'p', knight: 'n', bishop: 'b', rook: 'r', queen: 'q', king: 'k' };
-            for (const piece of pieces) {
-                const names = [...piece.classList];
-                const color = names.includes('white') ? 'white' : names.includes('black') ? 'black' : null;
-                const type = names.find(name => pieceNames[name]);
-                if (!color || !type) continue;
-                const boardRect = board.getBoundingClientRect();
-                const pieceRect = piece.getBoundingClientRect();
-                const squareWidth = boardRect.width / 8;
-                const squareHeight = boardRect.height / 8;
-                if (squareWidth && squareHeight && pieceRect.width && pieceRect.height) {
-                    const centerX = pieceRect.left + pieceRect.width / 2;
-                    const centerY = pieceRect.top + pieceRect.height / 2;
-                    const displayFile = Math.floor((centerX - boardRect.left) / squareWidth);
-                    const displayRank = Math.floor((centerY - boardRect.top) / squareHeight);
-                    const file = orientation === 'black' ? 7 - displayFile : displayFile;
-                    const rankFromTop = orientation === 'black' ? 7 - displayRank : displayRank;
-                    if (file >= 0 && file <= 7 && rankFromTop >= 0 && rankFromTop <= 7) {
-                        placement[rankFromTop][file] = color === 'white' ? pieceNames[type].toUpperCase() : pieceNames[type];
-                    }
-                    continue;
-                }
-                const transform = piece.style.transform || getComputedStyle(piece).transform || '';
-                const percentMatch = transform.match(/translate(?:3d)?\(\s*(-?\d+(?:\.\d+)?)%[, ]+\s*(-?\d+(?:\.\d+)?)%/);
-                const matrixMatch = transform.match(/matrix(?:3d)?\(([^)]+)\)/);
-                const match = percentMatch || matrixMatch;
-                if (!match) continue;
-                let displayFile, displayRank;
-                if (percentMatch) {
-                    displayFile = Math.round(parseFloat(percentMatch[1]) / 12.5);
-                    displayRank = Math.round(parseFloat(percentMatch[2]) / 12.5);
-                } else {
-                    const values = matrixMatch[1].split(',').map(Number);
-                    const x = matrixMatch[0].startsWith('matrix3d') ? values[12] : values[4];
-                    const y = matrixMatch[0].startsWith('matrix3d') ? values[13] : values[5];
-                    const width = board.clientWidth / 8;
-                    const height = board.clientHeight / 8;
-                    if (!Number.isFinite(x) || !Number.isFinite(y) || !width || !height) continue;
-                    displayFile = Math.round(x / width);
-                    displayRank = Math.round(y / height);
-                }
-                const file = orientation === 'black' ? 7 - displayFile : displayFile;
-                const rankFromTop = orientation === 'black' ? 7 - displayRank : displayRank;
-                if (file < 0 || file > 7 || rankFromTop < 0 || rankFromTop > 7) continue;
-                const symbol = color === 'white' ? pieceNames[type].toUpperCase() : pieceNames[type];
-                placement[rankFromTop][file] = symbol;
-            }
-            const rows = placement.map(row => {
-                let fenRow = '', empty = 0;
-                for (const piece of row) {
-                    if (!piece) empty++;
-                    else { if (empty) fenRow += empty; empty = 0; fenRow += piece; }
-                }
-                if (empty) fenRow += empty;
-                return fenRow;
-            });
-            if (rows.some(row => !row)) return null;
-            const turn = Platform.getLichessTurnFromPage(board) === 1 ? 'w' : 'b';
-            return `${rows.join('/')} ${turn} - - 0 1`;
-        },
-
-        getLichessTurnFromPage: (board) => {
-            const cg = Platform.getLichessChessground(board);
-            const candidates = [
-                cg?.state?.fen,
-                window.lichess?.analysis?.node?.fen,
-                window.lichess?.analysis?.tree?.root?.fen,
-                window.lichess?.round?.data?.game?.fen,
-                window.lichess?.round?.data?.game?.turn,
-                window.lichess?.game?.data?.game?.fen,
-                window.lichess?.data?.game?.fen,
-                board?.dataset?.fen,
-                board?.dataset?.state
-            ];
-            for (const candidate of candidates) {
-                if (!candidate) continue;
-                const text = String(candidate).trim();
-                const fenTurn = text.match(/\s([wb])\s/);
-                if (fenTurn) return fenTurn[1] === 'w' ? 1 : 2;
-                if (text === 'w' || text === 'white') return 1;
-                if (text === 'b' || text === 'black') return 2;
-                const stateTurn = text.split(',')[1];
-                if (stateTurn === 'white' || stateTurn === 'w') return 1;
-                if (stateTurn === 'black' || stateTurn === 'b') return 2;
-            }
-            if (cg?.state?.turnColor) return cg.state.turnColor === 'white' ? 1 : 2;
-            const turnClocks = [...document.querySelectorAll('.rclock-turn')];
-            const activeClock = turnClocks.find(clock => /your turn|opponent|thinking/i.test(clock.textContent || '')) || document.querySelector('.clock.turn, .game-turn');
-            if (activeClock) {
-                const activeClasses = `${activeClock.className} ${activeClock.parentElement?.className || ''}`;
-                if (/Your turn/i.test(activeClock.textContent || '')) return Platform.getLichessPlayerColor(board);
-                if (/black|top/i.test(activeClasses)) return 2;
-                if (/white|bottom/i.test(activeClasses)) return 1;
-            }
-            return null;
-        },
-
-        getLichessPlayerColor: (board) => {
-            const candidates = [
-                window.lichess?.data?.player?.color,
-                window.lichess?.round?.data?.player?.color,
-                window.lichess?.round?.data?.playerColor,
-                window.lichess?.game?.data?.player?.color,
-                board?.dataset?.orientation
-            ];
-            for (const candidate of candidates) {
-                if (candidate === 'white' || candidate === 'w') return 1;
-                if (candidate === 'black' || candidate === 'b') return 2;
-            }
-            const cg = Platform.getLichessChessground(board);
-            if (cg?.state?.orientation) return cg.state.orientation === 'white' ? 1 : 2;
-            const oriented = board?.closest?.('.orientation-black');
-            return oriented ? 2 : 1;
-        },
-
-        getFEN: (board) => {
-            if (!board) return null;
-            switch (Platform.current) {
-                case 'lichess': {
-                    const cg = Platform.getLichessChessground(board);
-                    const candidates = [
-                        cg?.state?.fen,
-                        cg?.getFen?.(),
-                        Platform.getLichessPageFEN(),
-                        board?.dataset?.fen,
-                        board?.dataset?.state?.split(',')[0],
-                        Platform.getBoard()?.dataset?.fen,
-                        Platform.getBoard()?.dataset?.state?.split(',')[0]
-                    ];
-
-                    for (const candidate of candidates) {
-                        const normalized = Platform.normalizeLichessFEN(candidate, cg);
-                        if (normalized) return normalized;
-                    }
-
-                    const domFEN = Platform.getLichessDomFEN(board);
-                    if (domFEN) return domFEN;
-
-                    // Final fallback: use the active board state if the engine exposes it.
-                    if (window.lichess?.analysis?.getFen) {
-                        const fen = window.lichess.analysis.getFen();
-                        const normalized = Platform.normalizeLichessFEN(fen, cg);
-                        if (normalized) return normalized;
-                    }
-                    return null;
-                }
-                case 'chess.com':
-                default:
-                    if (typeof board.game?.getFEN === 'function') return board.game.getFEN();
-                    if (typeof board.game?.fen === 'string') return board.game.fen;
-                    if (board.game?.getPosition) return board.game.getPosition();
-                    return null;
-            }
-        },
-
-        getTurn: (board) => {
-            if (!board) return null;
-            switch (Platform.current) {
-                case 'lichess': {
-                    const cg = Platform.getLichessChessground(board);
-                    const fen = Platform.normalizeLichessFEN(cg?.state?.fen || cg?.getFen?.() || Platform.getLichessPageFEN() || board?.dataset?.fen || board?.dataset?.state?.split(',')[0], cg);
-                    if (fen) {
-                        const parts = fen.trim().split(/\s+/);
-                        if (parts.length >= 2) return parts[1] === 'w' ? 1 : 2;
-                    }
-                    const domFen = Platform.getLichessDomFEN(board);
-                    if (domFen) return domFen.split(/\s+/)[1] === 'w' ? 1 : 2;
-                    return Platform.getLichessTurnFromPage(board);
-                }
-                case 'chess.com':
-                default:
-                    return board.game?.getTurn?.();
-            }
-        },
-
-        getPlayingAs: (board) => {
-            if (!board) return null;
-            switch (Platform.current) {
-                case 'lichess': {
-                    return Platform.getLichessPlayerColor(board);
-                }
-                case 'chess.com':
-                default:
-                    return board.game?.getPlayingAs?.();
-            }
-        },
-
-        getLegalMoves: (board) => {
-            if (!board) return [];
-            switch (Platform.current) {
-                case 'lichess': {
-                    const cg = Platform.getLichessChessground(board);
-                    if (cg && cg.state?.movable?.dests) {
-                        // Convert chessground dests map to move array
-                        const moves = [];
-                        cg.state.movable.dests.forEach((dests, orig) => {
-                            dests.forEach(dest => {
-                                moves.push({ from: orig, to: dest });
-                            });
-                        });
-                        return moves;
-                    }
-                    return [];
-                }
-                case 'chess.com':
-                default:
-                    return board.game?.getLegalMoves?.() || [];
-            }
-        },
-
-        makeMove: (board, move, promotion = 'q') => {
-            if (!board) return false;
-            switch (Platform.current) {
-                case 'lichess': {
-                    const uci = `${move.from}${move.to}${move.promotion && move.promotion !== 'q' ? move.promotion : ''}`;
-                    if (typeof window.lichess?.analysis?.playUci === 'function') {
-                        window.lichess.analysis.playUci(uci, []);
-                        return true;
-                    }
-                    const cg = Platform.getLichessChessground(board);
-                    if (cg) {
-                        // chessground.move takes from and to squares
-                        cg.move(move.from, move.to);
-                        // Handle promotion if needed
-                        if (move.promotion && move.promotion !== 'q') {
-                            // Promotion handled by chessground automatically in most cases
-                        }
-                        return true;
-                    }
-                    const rect = board.getBoundingClientRect();
-                    if (!rect.width || !rect.height) return false;
-                    const orientation = Platform.getLichessOrientation(board);
-                    const clickSquare = (square) => {
-                        const file = square.charCodeAt(0) - 97;
-                        const rank = parseInt(square.charAt(1), 10) - 1;
-                        if (file < 0 || file > 7 || rank < 0 || rank > 7) return false;
-                        const x = orientation === 'black' ? 7 - file : file;
-                        const y = orientation === 'black' ? rank : 7 - rank;
-                        const eventInit = { bubbles: true, cancelable: true, clientX: rect.left + (x + 0.5) * rect.width / 8, clientY: rect.top + (y + 0.5) * rect.height / 8 };
-                        const target = document.elementFromPoint(eventInit.clientX, eventInit.clientY) || board;
-                        if (typeof PointerEvent === 'function') {
-                            const pointerInit = { ...eventInit, pointerId: 1, pointerType: 'mouse', isPrimary: true, buttons: 1 };
-                            target.dispatchEvent(new PointerEvent('pointerdown', pointerInit));
-                            target.dispatchEvent(new PointerEvent('pointerup', { ...pointerInit, buttons: 0 }));
-                        }
-                        target.dispatchEvent(new MouseEvent('mousedown', eventInit));
-                        target.dispatchEvent(new MouseEvent('mouseup', eventInit));
-                        target.dispatchEvent(new MouseEvent('click', eventInit));
-                        return true;
-                    };
-                    return clickSquare(move.from) && clickSquare(move.to);
-                }
-                case 'chess.com':
-                default:
-                    if (board.game?.move) {
-                        return board.game.move({ ...move, promotion, animate: true, userGenerated: true });
-                    }
-                    return false;
-            }
-        },
-
-        isFlipped: (board) => {
-            if (!board) return false;
-            switch (Platform.current) {
-                case 'lichess': {
-                    const cg = Platform.getLichessChessground(board);
-                    if (cg) {
-                        return cg.state?.orientation === 'black';
-                    }
-                    return board.classList.contains('flipped') || board.dataset?.orientation === 'black';
-                }
-                case 'chess.com':
-                default:
-                    if (board.classList.contains('flipped')) return true;
-                    if (board.game?.getPlayingAs?.() === 'b' || board.game?.getPlayingAs?.() === 2) return true;
-                    return false;
-            }
-        }
-    };
-
-    // Initialize platform detection
-    Platform.init();
-
-    // Initialize Lichess player color once when page loads
-    if (Platform.isLichess?.()) {
-        setTimeout(() => {
-            lichessState.initPlayerColor();
-            console.log('[SF Engine] Lichess: Initialization complete. Ready for analysis.');
-        }, 1500);  // Wait for Lichess to fully load
-    }
-
-    // --- EXA SEARCH INTEGRATION ---
-    // Exa AI web search for opening lookup, player stats, etc.
-    const ExaSearch = {
-        apiKey: '',
-        baseUrl: 'https://api.exa.ai',
-        
-        init: () => {
-            ExaSearch.apiKey = settings.exaApiKey || GM_getValue('exaApiKey', '');
-        },
-        
-        setApiKey: (key) => {
-            ExaSearch.apiKey = key;
-            GM_setValue('exaApiKey', key);
-        },
-        
-        search: async (query, options = {}) => {
-            if (!ExaSearch.apiKey) {
-                console.warn('[ExaSearch] No API key set. Use ExaSearch.setApiKey() to configure.');
-                return { results: [], error: 'No API key' };
-            }
-            
-            const defaults = {
-                type: 'auto',
-                numResults: 5,
-                contents: { highlights: true, text: { maxCharacters: 2000 } },
-                ...options
-            };
-            
-            try {
-                const response = await fetch(`${ExaSearch.baseUrl}/search`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${ExaSearch.apiKey}`
-                    },
-                    body: JSON.stringify({ query, ...defaults })
-                });
-                
-                if (!response.ok) {
-                    const err = await response.text();
-                    throw new Error(`Exa API error: ${response.status} ${err}`);
-                }
-                
-                return await response.json();
-            } catch (e) {
-                console.error('[ExaSearch] Search failed:', e);
-                return { results: [], error: e.message };
-            }
-        },
-        
-        // Search for opening information
-        searchOpening: async (fen, move) => {
-            const query = `chess opening ${move} FEN ${fen.split(' ')[0]} best moves theory`;
-            return ExaSearch.search(query, { 
-                numResults: 3,
-                includeDomains: ['chess.com', 'lichess.org', 'wikipedia.org', 'chessable.com']
-            });
-        },
-        
-        // Search for player information
-        searchPlayer: async (username, platform) => {
-            const query = `${username} chess rating profile ${platform}`;
-            return ExaSearch.search(query, { 
-                numResults: 3,
-                includeDomains: ['chess.com', 'lichess.org', 'chessgames.com']
-            });
-        },
-        
-        // Search for endgame theory
-        searchEndgame: async (fen) => {
-            const query = `chess endgame theory ${fen.split(' ')[0]} tablebase`;
-            return ExaSearch.search(query, { 
-                numResults: 3,
-                includeDomains: ['lichess.org', 'chess.com', 'syzygy-tables.info', 'wikipedia.org']
-            });
-        }
-    };
-    
     const PIECE_IMGS = {
         p: "https://upload.wikimedia.org/wikipedia/commons/c/c7/Chess_pdt45.svg",
         r: "https://upload.wikimedia.org/wikipedia/commons/f/ff/Chess_rdt45.svg",
@@ -507,6 +54,7 @@
     const STOCKFISH_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAAsTAAALEwEAmpwYAAAEGklEQVR4nO2ZW2gcVRjH/9+Z3ewm22xMNtVGU9RIxNqmFxF8sC0iFhF8UF980QcFL1jwaRELXnwQBC94UfBBEQtK0Yqi1LwgaL0k0DQm2zapm2az2d1kd2bO8f/M7Gw22U12052lB34wzMzO+Z/vO+d85ztnlkQIIYQQQgghhBBCSKtQSt1BCHmOEDKplLqD53n7x8fH9xBCfC2U0r2EkNcIIY/xPG9rIR4F8CGl9EEA+wghG5s9+yGl9F0A+9sKEEJ8B+A5AMcIIb6W/v8B4BCl9AkA+1oK8Ty/m1L6LID9hJCNzb7ZhRL6IoD9bQcopc8SQp4ghExt9mw/pfR5APtbcwH1C68W/l8B3wO463+xAOu5gH2EkG2EENSX8F4A+wkhG7mA+l3gVwD3tBCAUvoYIeQpQkh/s2f7KaVPAthfFw/4HsA+QsjGZt/sJ5Q+01oArvN9Qkh/s2f7KaWPE0L2112Au8D3AO4jhGxs9u0+SulTAPbXFfA9gP2EkI3NvttPKX0KwP66Ar4HsJ8QsrHZd/sppU8C2F9XwPcA9hNCNjb7bj+l9CkA++sK+B7AfYSQjc2+208pfQrA/rYClNI9hJCnCCHTmz3bTyl9CsD+tgOU0mcIIU8RQqY3e7afUvo0gP1tBSilz1BKnwGwv60A/H8uQAh5DsB+QsjGZt98Qil9DsD+1gKU0ucIIc8QQqY2e7afUvo8gP2tBaij0N8A7iOEbGz23X5K6fMA9tcV8D2A+wghG5t9t59S+iSA/XUFfA9gPyFkY7Pv9lNKTwLYX1fA9wDuI4RsbPbd/v8U4H/fA0II8Ty/mxDiA7C/Lh7wPID9hJCNzb7dTyl9EcD+ungA8Ty/mxDiA7C/pQCldC+l9EUA+1sK8Ty/hxDya0rpCwD2txTg/7kAIeR5APtbut8ghBBC2pZ/ALy683b5qZ2oAAAAAElFTkSuQmCC";
 
     const DEFAULT_WASM_URL = "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm";
+const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-installs";
 
     // ─── Local Engine Registry ──
     // Each entry describes one loadable local engine variant.
@@ -760,95 +308,8 @@
         humanizer: false,
         humanizeRate: 15,
         autoRematch: false,
-        // Exa AI search integration
-        exaApiKey: "",
-        exaSearchEnabled: false,
     };
     const settings = { ...DEFAULT_SETTINGS };
-    
-    // ─── LICHESS COLOR DETECTION (v10.0.23+) ───────────────────────────────────────
-    // Get player color FIRST (white=1, black=2), then only analyze YOUR moves
-    // Same proven logic as Chess.com - prevents analyzing opponent moves
-    const lichessState = {
-        playerColor: null,
-        initialized: false,
-        
-        initPlayerColor: () => {
-            if (lichessState.initialized) return lichessState.playerColor;
-            
-            const board = state.board || Platform.getBoard();
-            if (!board) return null;
-            
-            // Priority 1: chessground orientation (most reliable)
-            try {
-                const cg = Platform.getLichessChessground?.(board);
-                if (cg?.state?.orientation) {
-                    lichessState.playerColor = cg.state.orientation === 'black' ? 2 : 1;
-                    lichessState.initialized = true;
-                    console.log('[SF Engine] Lichess: Player color detected (chessground):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
-                    return lichessState.playerColor;
-                }
-            } catch (e) {}
-            
-            // Priority 2: Lichess API
-            try {
-                const color = window.lichess?.data?.player?.color || window.lichess?.round?.data?.player?.color;
-                if (color) {
-                    lichessState.playerColor = color === 'black' ? 2 : 1;
-                    lichessState.initialized = true;
-                    console.log('[SF Engine] Lichess: Player color detected (API):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
-                    return lichessState.playerColor;
-                }
-            } catch (e) {}
-            
-            // Priority 3: Board dataset
-            try {
-                if (board.dataset?.orientation === 'black') {
-                    lichessState.playerColor = 2;
-                } else {
-                    lichessState.playerColor = 1;
-                }
-                lichessState.initialized = true;
-                console.log('[SF Engine] Lichess: Player color detected (dataset):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
-                return lichessState.playerColor;
-            } catch (e) {}
-            
-            // Fallback: assume white
-            lichessState.playerColor = 1;
-            lichessState.initialized = true;
-            console.log('[SF Engine] Lichess: Player color assumed: WHITE');
-            return 1;
-        },
-        
-        getTurnColor: (board) => {
-            // Get whose turn it is (1=white, 2=black)
-            try {
-                const cg = Platform.getLichessChessground?.(board);
-                if (cg?.state?.turnColor) {
-                    return cg.state.turnColor === 'white' ? 1 : 2;
-                }
-            } catch (e) {}
-            
-            // Fallback: extract from FEN
-            try {
-                const fen = Platform.getFEN?.(board);
-                if (fen) {
-                    const parts = fen.split(/\s+/);
-                    return parts[1] === 'w' ? 1 : 2;
-                }
-            } catch (e) {}
-            
-            return 1;  // Default white
-        },
-        
-        isYourTurn: (board) => {
-            if (!lichessState.initialized) {
-                lichessState.initPlayerColor();
-            }
-            const turn = lichessState.getTurnColor(board);
-            return lichessState.playerColor === turn;
-        }
-    };
     // --- COLOR HELPERS ---
     const hexToRgb = (hex) => {
         const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -935,148 +396,10 @@
         settings.engineMode = "local";
         // Load per-model settings for the active model
         loadModelSettings(settings.localModelId || "sf18_05");
-        // Initialize Exa search with saved API key
-        if (typeof ExaSearch !== 'undefined' && ExaSearch.init) {
-            ExaSearch.init();
-        }
     }
     // --- UTILITIES ---
     const getRandomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
     const log = (...args) => { if (settings?.debugLogs) console.log(...args); };
-
-    // --- ERROR REPORTER (console as error report storage) ---
-    const ErrorReporter = {
-        entries: [],
-        maxEntries: 500,
-        
-        capture: (context, error, extra = {}) => {
-            const entry = {
-                timestamp: new Date().toISOString(),
-                context: context,
-                message: error?.message || String(error),
-                stack: error?.stack || "no stack",
-                name: error?.name || "Error",
-                extra: extra,
-                url: window.location.href,
-                platform: Platform.current,
-                engineStatus: state.engineStatus,
-                engineMode: settings.engineMode,
-                localModelId: settings.localModelId,
-                isThinking: state.isThinking,
-                hasBoard: !!state.board,
-                hasEngine: !!state.localEngine,
-                userAgent: navigator.userAgent.substring(0, 200)
-            };
-            ErrorReporter.entries.push(entry);
-            if (ErrorReporter.entries.length > ErrorReporter.maxEntries) {
-                ErrorReporter.entries.shift();
-            }
-            // Also log to console immediately
-            console.error(`[ERR:${context}]`, entry.message, "\nStack:", entry.stack, "\nExtra:", JSON.stringify(extra, null, 2));
-            return entry;
-        },
-        
-        captureSync: (context, fn, extra = {}) => {
-            try {
-                return fn();
-            } catch (e) {
-                ErrorReporter.capture(context, e, extra);
-                throw e;
-            }
-        },
-        
-        wrap: (context, fn, extra = {}) => {
-            return (...args) => {
-                try {
-                    return fn.apply(this, args);
-                } catch (e) {
-                    ErrorReporter.capture(`${context}(${args.map(a => JSON.stringify(a).substring(0,50)).join(",")})`, e, { ...extra, argsCount: args.length });
-                    throw e;
-                }
-            };
-        },
-        
-        wrapAsync: (context, fn, extra = {}) => {
-            return async (...args) => {
-                try {
-                    return await fn.apply(this, args);
-                } catch (e) {
-                    ErrorReporter.capture(`${context}(${args.map(a => JSON.stringify(a).substring(0,50)).join(",")})`, e, { ...extra, argsCount: args.length });
-                    throw e;
-                }
-            };
-        },
-        
-        dump: () => {
-            console.group(`📋 ERROR REPORT DUMP (${ErrorReporter.entries.length} entries)`);
-            ErrorReporter.entries.forEach((e, i) => {
-                console.log(`\n--- [${i}] ${e.timestamp} | ${e.context} ---`);
-                console.log(`Message: ${e.message}`);
-                console.log(`Stack: ${e.stack}`);
-                console.log(`Platform: ${e.platform} | Engine: ${e.engineStatus} | Mode: ${e.engineMode}`);
-                console.log(`Model: ${e.localModelId} | Thinking: ${e.isThinking} | Board: ${e.hasBoard} | Engine: ${e.hasEngine}`);
-                if (Object.keys(e.extra).length) console.log(`Extra:`, e.extra);
-            });
-            console.groupEnd();
-            return ErrorReporter.entries;
-        },
-        
-        clear: () => { ErrorReporter.entries = []; },
-        
-        getSummary: () => {
-            const byContext = {};
-            ErrorReporter.entries.forEach(e => {
-                byContext[e.context] = (byContext[e.context] || 0) + 1;
-            });
-            return { total: ErrorReporter.entries.length, byContext };
-        }
-    };
-    
-    // Make globally accessible for manual dump
-    window.__SF_ErrorReporter = ErrorReporter;
-
-    // Auto-dump errors to console every 30 seconds
-    setInterval(() => {
-        if (ErrorReporter.entries.length > 0) {
-            console.group(`📋 AUTO ERROR DUMP (${ErrorReporter.entries.length} entries)`);
-            ErrorReporter.entries.forEach((e, i) => {
-                console.log(`\n--- [${i}] ${e.timestamp} | ${e.context} ---`);
-                console.log(`Message: ${e.message}`);
-                console.log(`Stack: ${e.stack}`);
-                console.log(`Platform: ${e.platform} | Engine: ${e.engineStatus} | Mode: ${e.engineMode}`);
-                console.log(`Model: ${e.localModelId} | Thinking: ${e.isThinking} | Board: ${e.hasBoard} | Engine: ${e.hasEngine}`);
-                if (Object.keys(e.extra).length) console.log(`Extra:`, e.extra);
-            });
-            console.groupEnd();
-        }
-    }, 30000);
-
-    // Dump on engine status change to error
-    const setEngineStatusBase = function(status, msg) {
-        state.engineStatus = status;
-        state.engineStatusMsg = msg || "";
-        updateLocalSettingsUI();
-    };
-
-    function setEngineStatus(status, msg) {
-        if (status === "error") {
-            ErrorReporter.capture('setEngineStatus->error', new Error(msg), { previousStatus: state.engineStatus });
-        }
-        setEngineStatusBase(status, msg);
-    }
-
-    // Global error handlers
-    window.addEventListener('error', (e) => {
-        ErrorReporter.capture('window.onerror', e.error || new Error(e.message), { 
-            filename: e.filename, 
-            lineno: e.lineno, 
-            colno: e.colno 
-        });
-    });
-    
-    window.addEventListener('unhandledrejection', (e) => {
-        ErrorReporter.capture('unhandledrejection', e.reason, { promise: e.promise });
-    });
 
     // Anti-cheat: occasionally delay analysis start by a short random amount (subtle, not annoying)
     // Returns true when analysis should be skipped this tick (short pause active).
@@ -1097,9 +420,9 @@ const scheduleAutoMove = (fn, delayMs) => {
     state.pendingAutoMoveTimeout = setTimeout(() => {
         state.pendingAutoMoveTimeout = null;
         // Re-check it's still our turn at execution time (not just scheduling time)
-        if (state.board) {
-            const tn = Platform.getTurn(state.board);
-            const pa = Platform.getPlayingAs(state.board);
+        if (state.board?.game) {
+            const tn = state.board.game.getTurn();
+            const pa = state.board.game.getPlayingAs();
             const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
             const paNum = (pa === 1 || pa === "w" || pa === "white") ? 1 : 2;
             if (turnNum !== paNum) {
@@ -1129,13 +452,13 @@ const getMoveWinPct = (cp, mate) => {
 
     // --- BOARD FEN LOGIC ---
     function getRawBoardFEN() {
-        return ErrorReporter.wrap('getRawBoardFEN', () => {
-            if (!state.board) return null;
-            try {
-                return Platform.getFEN(state.board);
-            } catch (e) {}
-            return null;
-        })();
+        if (!state.board?.game) return null;
+        try {
+            if (typeof state.board.game.getFEN === "function") return state.board.game.getFEN();
+            if (typeof state.board.game.fen === "string") return state.board.game.fen;
+            if (state.board.game.getPosition) return state.board.game.getPosition();
+        } catch (e) {}
+        return null;
     }
     function sanitizeFEN(rawFEN) {
         if (!rawFEN) return "";
@@ -1182,7 +505,7 @@ const getMoveWinPct = (cp, mate) => {
 
             // NATIVE ARROW HANDLING
             if (settings.visualType === "nativeArrow") {
-                state.board = Platform.getBoard();
+                state.board = document.querySelector(CONFIG.BOARD_SEL);
                 if (state.board?.game?.markings) {
                     state.board.game.markings.addOne({
                         type: "arrow",
@@ -1192,9 +515,9 @@ const getMoveWinPct = (cp, mate) => {
                             to: move.substring(2, 4)
                         }
                     });
-                    state.visuals.push({ id, move, type, interval: null, isFading: false });
-                    return;
                 }
+                state.visuals.push({ id, move, type, interval: null, isFading: false });
+                return; // Skips fading/DOM duration logic entirely
             }
 
             Visuals.draw(id, move);
@@ -1218,7 +541,7 @@ const getMoveWinPct = (cp, mate) => {
             }
         },
         draw: (id, move) => {
-            state.board = Platform.getBoard();
+            state.board = document.querySelector(CONFIG.BOARD_SEL);
             if (!state.board) return;
             const root = ShadowKit.boardRoot(state.board);
             if (root.querySelector(`.${id}`)) return;
@@ -1227,7 +550,9 @@ const getMoveWinPct = (cp, mate) => {
             const from = move.substring(0, 2);
             const to = move.substring(2, 4);
             const drawBox = () => {
-                let isFlipped = Platform.isFlipped(state.board);
+                let isFlipped = !1;
+                if (state.board.classList.contains("flipped")) isFlipped = !0;
+                else if (state.board.game && state.board.game.getPlayingAs && state.board.game.getPlayingAs() === "b") isFlipped = !0;
                 [from, to].forEach((alg) => {
                     const file = alg.charCodeAt(0) - 97, rank = parseInt(alg.charAt(1)) - 1;
                     const left = isFlipped ? (7 - file) * 12.5 : file * 12.5;
@@ -1254,7 +579,7 @@ const getMoveWinPct = (cp, mate) => {
             if (!vis) return;
             vis.isFading = true;
             clearInterval(vis.interval);
-            const fr = ShadowKit.boardRoot(state.board || Platform.getBoard());
+            const fr = ShadowKit.boardRoot(state.board || document.querySelector(CONFIG.BOARD_SEL));
             const els = fr ? fr.querySelectorAll(`.${id}`) : [];
             els.forEach(el => {
                 el.style.setProperty("transition", `opacity ${settings.visualDuration}s linear`, "important");
@@ -1265,11 +590,11 @@ const getMoveWinPct = (cp, mate) => {
         remove: (id) => {
             const idx = state.visuals.findIndex(v => v.id === id);
             if (idx !== -1) { clearInterval(state.visuals[idx].interval); state.visuals.splice(idx, 1); }
-            const rr = ShadowKit.boardRoot(state.board || Platform.getBoard());
+            const rr = ShadowKit.boardRoot(state.board || document.querySelector(CONFIG.BOARD_SEL));
             if (rr) rr.querySelectorAll(`.${id}`).forEach(el => el.remove());
 
             if (settings.visualType === "nativeArrow") {
-                const board = Platform.getBoard();
+                const board = document.querySelector(CONFIG.BOARD_SEL);
                 if (board?.game?.markings) {
                     board.game.markings.removeAll();
                 }
@@ -1290,9 +615,9 @@ const getMoveWinPct = (cp, mate) => {
             PV.draw();
             if (!PV.interval) PV.interval = setInterval(PV.draw, 100);
         },
-        clear: () => { if (PV.interval) { clearInterval(PV.interval); PV.interval = null; } const cr = ShadowKit.boardRoot(state.board || Platform.getBoard()); if (cr) cr.querySelectorAll('.pv-arrow').forEach(el => el.remove()); },
+        clear: () => { if (PV.interval) { clearInterval(PV.interval); PV.interval = null; } const cr = ShadowKit.boardRoot(state.board || document.querySelector(CONFIG.BOARD_SEL)); if (cr) cr.querySelectorAll('.pv-arrow').forEach(el => el.remove()); },
         draw: () => {
-            state.board = Platform.getBoard();
+            state.board = document.querySelector(CONFIG.BOARD_SEL);
             if (!state.board) return;
             if (!settings.showPVArrows || !PV.lastMoves.length) { PV.clear(); return; }
             const root = ShadowKit.boardRoot(state.board);
@@ -1463,7 +788,7 @@ const getMoveWinPct = (cp, mate) => {
 
         create: () => {
             injectEvalStyles();
-            const board = state.board || Platform.getBoard();
+            const board = state.board || document.querySelector(CONFIG.BOARD_SEL);
             if (!board) return;
 
             if (EvalBar.el) {
@@ -1511,7 +836,7 @@ const getMoveWinPct = (cp, mate) => {
 
         updatePosition: () => {
             if (!EvalBar.el) return;
-            const board = state.board || Platform.getBoard();
+            const board = state.board || document.querySelector(CONFIG.BOARD_SEL);
             if (!board) return;
             if (EvalBar._lastBoard !== board) {
                 EvalBar.el.remove();
@@ -1537,9 +862,9 @@ const getMoveWinPct = (cp, mate) => {
         },
 
         getPlayingAs: () => {
-            const board = state.board || Platform.getBoard();
-            if (board) {
-                const pa = Platform.getPlayingAs(board);
+            const board = state.board || document.querySelector(CONFIG.BOARD_SEL);
+            if (board?.game?.getPlayingAs) {
+                const pa = board.game.getPlayingAs();
                 if (pa === 1 || pa === "w" || pa === "white") { state.playingAs = 1; return 1; }
                 if (pa === 2 || pa === "b" || pa === "black") { state.playingAs = 2; return 2; }
             }
@@ -1737,7 +1062,7 @@ const getMoveWinPct = (cp, mate) => {
             // Ensure overflow is visible so highlights aren't clipped
             if (board.style.overflow === 'hidden') board.style.overflow = 'visible';
 
-            const isFlipped = Platform.isFlipped(board);
+            const isFlipped = board.classList.contains("flipped");
 
             // Draw red highlight on attacking piece's source square
             const drawSquare = (sq, alpha) => {
@@ -1800,7 +1125,7 @@ const getMoveWinPct = (cp, mate) => {
             if (ThreatDetector.redrawInterval) { clearInterval(ThreatDetector.redrawInterval); ThreatDetector.redrawInterval = null; }
             ThreatDetector.highlightEls.forEach(el => el.remove());
             ThreatDetector.highlightEls = [];
-            const tr = ShadowKit.boardRoot(state.board || Platform.getBoard());
+            const tr = ShadowKit.boardRoot(state.board || document.querySelector(CONFIG.BOARD_SEL));
             if (tr) tr.querySelectorAll(".threat-highlight, #threat-arrow").forEach(el => el.remove());
         },
 
@@ -1822,7 +1147,7 @@ const getMoveWinPct = (cp, mate) => {
         observer: null,
         node: null,
         ensure: () => {
-            const board = state.board || Platform.getBoard();
+            const board = state.board || document.querySelector(CONFIG.BOARD_SEL);
             if (!board) return;
             if (HighlightObserver.observer && HighlightObserver.node === board) return;
             if (HighlightObserver.observer) HighlightObserver.observer.disconnect();
@@ -1844,7 +1169,8 @@ const getMoveWinPct = (cp, mate) => {
 
     function drawPVArrow(move, id, color, index) {
         if (!state.board) return;
-        let isFlipped = Platform.isFlipped(state.board);
+        let isFlipped = state.board.classList.contains("flipped");
+        if (!isFlipped && state.board.game && state.board.game.getPlayingAs && state.board.game.getPlayingAs() === "b") isFlipped = true;
         const from = move.substring(0, 2), to = move.substring(2, 4);
         const getCoords = (sq) => {
             const file = sq.charCodeAt(0) - 97, rank = parseInt(sq[1]) - 1;
@@ -1888,7 +1214,9 @@ const getMoveWinPct = (cp, mate) => {
     }
     function drawArrow(move, id) {
         const color = settings.highlightColor, opacity = settings.arrowOpacity, width = settings.arrowWidth;
-        let isFlipped = Platform.isFlipped(state.board);
+        let isFlipped = !1;
+        if (state.board.classList.contains("flipped")) isFlipped = !0;
+        else if (state.board.game && state.board.game.getPlayingAs && state.board.game.getPlayingAs() === "b") isFlipped = !0;
         const from = move.substring(0, 2), to = move.substring(2, 4);
         const getCoords = (sq) => {
             const file = sq.charCodeAt(0) - 97, rank = parseInt(sq[1]) - 1;
@@ -1938,6 +1266,11 @@ const getMoveWinPct = (cp, mate) => {
     }
 
     // --- SF18 ENGINE CORE ---
+    function setEngineStatus(status, msg) {
+        state.engineStatus = status;
+        state.engineStatusMsg = msg || "";
+        updateLocalSettingsUI();
+    }
 
     // ─── MULTI-MODEL ENGINE CORE ──────────────────────────────────────────────
 
@@ -1964,12 +1297,49 @@ const getMoveWinPct = (cp, mate) => {
     const MODULE_CACHE_VERSION = 1;
 
     // Build a Worker from a patched JS blob (for WASM-based engines)
-    function buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule, wasmUrl) {
+    function buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule) {
+        // Bootstrapped worker + zero-copy transfer (replaces the base64 blob).
+        // Main thread sends {__type:"launch", jsCode, wasmBytes} with the wasm
+        // ArrayBuffer TRANSFERRED (no copy), or {__type:"launch-module"} with a
+        // previously COMPILED WebAssembly.Module (transferred, no bytes at all).
+        // The bootstrap installs the proven minimal fetch mock ({ok, arrayBuffer})
+        // FIRST, then runs the loader via new Function — which lands in the
+        // same worker branch the blob worker used (no hash, no base64/atob).
+        // In module mode, WebAssembly.instantiate is intercepted so the loader's
+        // bytes-based instantiate call compiles NOTHING — it instantiates the
+        // cached module directly (skips the entire 4-5s compile).
         const moduleMode = !!compiledModule;
         const bootstrapCode = `
 var _wasmBytes = null;
 var _wasmModule = null;
 var _modulePosted = false;
+var _origInstantiate = WebAssembly.instantiate;
+WebAssembly.instantiate = function(bufferOrModule, imports) {
+    var args = arguments;
+    if (_wasmModule) {
+        self.postMessage("__probe:instantiate-from-module");
+        args = [_wasmModule, imports];
+    }
+    var p = _origInstantiate.apply(WebAssembly, args);
+    return p.then(function(res) {
+        if (!_modulePosted && res && res.module) {
+            _modulePosted = true;
+            self.postMessage("__probe:module-captured");
+            try {
+                self.postMessage({ __type: "module", module: res.module }, [res.module]);
+            } catch (e) {
+                self.postMessage("__probe:module-post-failed " + (e && e.message || e));
+            }
+        }
+        return res;
+    }, function(err) {
+        if (_wasmModule) {
+            _wasmModule = null;
+            self.postMessage("__probe:module-instantiate-failed " + (err && err.message || err));
+        }
+        throw err;
+    });
+};
 self.postMessage("__probe:bootstrap-ready");
 var _probeCount = 0;
 setInterval(function(){ self.postMessage("__probe:beacon " + Math.round(performance.now())); }, 3000);
@@ -2223,77 +1593,43 @@ self.onmessage = function(e) {
         });
     }
 
-// ─── Main load entry point ────────────────────────────────────────────────
+    // ─── Main load entry point ────────────────────────────────────────────────
     function loadLocalEngine() {
-            if (state.localEngine || state.engineLoadingInProgress) {
-                console.log(`[SF Engine] loadLocalEngine skipped: localEngine=${!!state.localEngine}, loadingInProgress=${state.engineLoadingInProgress}`);
-                return;
-            }
-            if (state.engineRetryAt && Date.now() < state.engineRetryAt) {
-                console.log(`[SF Engine] loadLocalEngine skipped: retry cooldown active (${Math.ceil((state.engineRetryAt - Date.now()) / 1000)}s left)`);
-                state.isThinking = false;
-                state.lastSanitizedBoardFEN = "";
-                return;
-            }
-            const loadGeneration = ++state.engineLoadGeneration;
-            const isCurrentLoad = () => state.engineLoadGeneration === loadGeneration;
-            console.log(`[SF Engine] loadLocalEngine START`);
-            state.engineLoadingInProgress = true;
-            state.isThinking = false;
-            const modelId = settings.localModelId || "sf18_05";
-            const m = getEngineById(modelId);
-            const label = m.format === "asmjs" ? `${m.label} (asm.js)` : m.label;
-            console.log(`[SF Engine] Loading model: ${label} (id=${modelId}, format=${m.format})`);
-            console.debug(`[SF Engine] Model URLs: jsUrl=${m.jsUrl}, wasmUrl=${m.wasmUrl}`);
-            setEngineStatus("loading", "Checking cache...");
-            state.lastMoveResult = `⏳ Loading ${label}...`;
-            updateUI();
+        if (state.localEngine || state.engineLoadingInProgress) {
+            console.log(`[SF Engine] loadLocalEngine skipped: localEngine=${!!state.localEngine}, loadingInProgress=${state.engineLoadingInProgress}`);
+            return;
+        }
+    if (state.engineRetryAt && Date.now() < state.engineRetryAt) {
+        console.log(`[SF Engine] loadLocalEngine skipped: retry cooldown active (${Math.ceil((state.engineRetryAt - Date.now()) / 1000)}s left)`);
+        state.isThinking = false;
+        state.lastSanitizedBoardFEN = "";
+        return;
+    }
+        const loadGeneration = ++state.engineLoadGeneration;
+        const isCurrentLoad = () => state.engineLoadGeneration === loadGeneration;
+        console.log(`[SF Engine] loadLocalEngine START`);
+        state.engineLoadingInProgress = true;
+        state.isThinking = false;
+        const modelId = settings.localModelId || "sf18_05";
+        const m = getEngineById(modelId);
+        const label = m.format === "asmjs" ? `${m.label} (asm.js)` : m.label;
+        console.log(`[SF Engine] Loading model: ${label} (id=${modelId}, format=${m.format})`);
+        console.debug(`[SF Engine] Model URLs: jsUrl=${m.jsUrl}, wasmUrl=${m.wasmUrl}`);
+        setEngineStatus("loading", "Checking cache...");
+        state.lastMoveResult = `⏳ Loading ${label}...`;
+        updateUI();
 
-            // Last-resort safety net: every earlier step (IDB open, cache reads) is
-            // timeout-guarded, but if anything unforeseen stalls the chain, this
-            // fires once after 120s of "loading" with no worker built and reports a
-            // real error instead of leaving the engine stuck loading forever
-            // (incognito/private mode often blocks or stalls IndexedDB).
-            if (state.engineLoadWatchdog) { clearTimeout(state.engineLoadWatchdog); state.engineLoadWatchdog = null; }
-            state.engineLoadWatchdog = setTimeout(() => {
-                state.engineLoadWatchdog = null;
-                if (!isCurrentLoad()) return;
-                if (!state.localEngine && state.engineLoadingInProgress) {
-                    state.engineLoadingInProgress = false;
-                    state.isThinking = false;
-                    state.pendingLocalFEN = null;
-                    state.pendingLocalDepth = null;
-                    state.engineLoadGeneration++;
-                    state.engineRetryAt = Date.now() + 120000;
-                    setEngineStatus("error", "Engine load timed out (storage/network stalled in this window). Try the Reinstall button or a normal window.");
-                }
-            }, 300000);
-
-            openCache((dbErr, db) => {
-                if (!isCurrentLoad()) return;
-                if (dbErr) {
-                    console.warn(`[SF Engine] IndexedDB open failed (continuing without cache):`, dbErr);
-                }
-                console.log(`[SF Engine] IndexedDB ${db ? 'opened' : 'unavailable'}`);
-
-                if (m.format === "asmjs") {
-                    // ── asm.js path: XHR the JS text, build Worker directly ──────
-                    const launch = (jsCode) => {
-                        if (!isCurrentLoad()) return;
-                        try {
-                            console.log(`[SF Engine] Building asm.js worker...`);
-                            state.localEngine = buildAsmJsEngine(jsCode);
-                            state.localEngine.onerror = onEngineWorkerError;
-                            state.localEngine.onmessage = handleLocalMessage;
-                            console.log(`[SF Engine] asm.js worker created, finalizing...`);
-                            finalizeEngine(modelId);
-                        } catch (e) {
-                            ErrorReporter.capture('loadLocalEngine.launch.asmjs', e, { modelId });
-                            console.error(`[SF Engine] Failed to build asm.js worker:`, e);
-                            state.engineLoadingInProgress = false;
-                            setEngineStatus("error", e.message || "Build failed");
-                        }
-                    };
+        // Last-resort safety net: every earlier step (IDB open, cache reads) is
+        // timeout-guarded, but if anything unforeseen stalls the chain, this
+        // fires once after 120s of "loading" with no worker built and reports a
+        // real error instead of leaving the engine stuck loading forever
+        // (incognito/private mode often blocks or stalls IndexedDB).
+        if (state.engineLoadWatchdog) { clearTimeout(state.engineLoadWatchdog); state.engineLoadWatchdog = null; }
+        state.engineLoadWatchdog = setTimeout(() => {
+            state.engineLoadWatchdog = null;
+            if (!isCurrentLoad()) return;
+            if (!state.localEngine && state.engineLoadingInProgress) {
+                state.engineLoadingInProgress = false;
                 state.isThinking = false;
                 state.pendingLocalFEN = null;
                 state.pendingLocalDepth = null;
@@ -2322,7 +1658,6 @@ self.onmessage = function(e) {
                         console.log(`[SF Engine] asm.js worker created, finalizing...`);
                         finalizeEngine(modelId);
                     } catch (e) {
-                        ErrorReporter.capture('loadLocalEngine.launch.asmjs', e, { modelId });
                         console.error(`[SF Engine] Failed to build asm.js worker:`, e);
                         state.engineLoadingInProgress = false;
                         setEngineStatus("error", e.message || "Build failed");
@@ -2383,7 +1718,7 @@ self.onmessage = function(e) {
                             console.log(`[SF Engine] Caching patched worker data...`);
                             writeCacheAsync(db, patchedKey, { jsCode, wasmBytes }).catch(() => {});
                         }
-                        state.localEngine = buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule, m.wasmUrl);
+                        state.localEngine = buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule);
                         state.localEngine.onerror = onEngineWorkerError;
                         state.localEngine.onmessage = handleLocalMessage;
                         console.log(`[SF Engine] WASM worker created, finalizing...`);
@@ -2630,17 +1965,6 @@ self.onmessage = function(e) {
     function analyze(depth = settings.depth, fenOverride = null, isRetry = !1) {
         depth = computeSmartDepth(depth);
         if (state.isThinking && !fenOverride && !isRetry) return;
-        
-        // ─── LICHESS FIX: Check player color FIRST (Chess.com style) ───
-        // Only analyze if it's YOUR turn, not opponent's move
-        if (Platform.isLichess?.()) {
-            const board = state.board || Platform.getBoard();
-            if (board && !lichessState.isYourTurn(board)) {
-                console.log('[SF Engine] Lichess: Skipping analysis (opponent\'s turn)');
-                return;  // Skip opponent moves
-            }
-        }
-        
         const wasThinking = state.isThinking;
         let finalFEN = fenOverride || sanitizeFEN(getRawBoardFEN());
         if (!finalFEN) return;
@@ -2685,16 +2009,15 @@ self.onmessage = function(e) {
             const bookMove = OpeningBook.lookup(finalFEN);
             if (bookMove) {
                 const board = state.board;
-                if (board) {
-                    const tn = Platform.getTurn(board);
-                    const pn = Platform.getPlayingAs(board);
+                if (board?.game?.getTurn && board?.game?.getPlayingAs) {
+                    const tn = board.game.getTurn();
+                    const pn = board.game.getPlayingAs();
                     const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
                     const paNum = (pn === 1 || pn === "w" || pn === "white") ? 1 : 2;
                     if (turnNum === paNum) {
                         const from = bookMove.substring(0, 2);
                         const to = bookMove.substring(2, 4);
-                        const legalMoves = Platform.getLegalMoves(board);
-                        if (legalMoves.some(m => m.from === from && m.to === to)) {
+                        if (board.game.getLegalMoves().some(m => m.from === from && m.to === to)) {
                             // Book moves should have human-like delays too, not instant
                             const tmDelay = computeTimeManagedDelay();
                             let bookDelay;
@@ -3045,7 +2368,7 @@ self.onmessage = function(e) {
         // - chess-api (cloud) and stockfish.online (sfonline) return WHITE-perspective
         //   eval AND mate (confirmed via API docs + original bar logic).
         // - local engine returns side-to-move perspective; we always analyze on our turn.
-        const playingAsRaw = Platform.getPlayingAs(state.board) || state.playingAs || 1;
+        const playingAsRaw = state.board?.game?.getPlayingAs?.() || state.playingAs || 1;
         const playingAsNorm = (playingAsRaw === 1 || playingAsRaw === "w" || playingAsRaw === "white") ? 1 : 2;
         const ourSign = (playingAsNorm === 2) ? -1 : 1;
         const needsFlip = settings.engineMode !== "local";
@@ -3125,30 +2448,28 @@ self.onmessage = function(e) {
         const pa = state.playingAs;
         const playingAsBlack = (pa === 2 || pa === "b" || pa === "black");
         let clockEl = null;
-        
-        if (Platform.isLichess()) {
-            clockEl = document.querySelector('.rclock-bottom, .rclock-bottom .clock-time');
+        if (playingAsBlack) {
+            // Black's clock on the bottom when playing as black
+            clockEl = document.querySelector(".clock-bottom .clock-time-monospace");
+            if (!clockEl) clockEl = document.querySelector(".clock-bottom");
+            // Fallback: try to get from board orientation
+            if (!clockEl) {
+                const clocks = document.querySelectorAll(".clock-time-monospace, .clock-time");
+                if (clocks.length >= 2) clockEl = clocks[1];
+                else if (clocks.length === 1) clockEl = clocks[0];
+            }
         } else {
-            // Chess.com clock selectors
-            if (playingAsBlack) {
-                clockEl = document.querySelector(".clock-bottom .clock-time-monospace");
-                if (!clockEl) clockEl = document.querySelector(".clock-bottom");
-                if (!clockEl) {
-                    const clocks = document.querySelectorAll(".clock-time-monospace, .clock-time");
-                    if (clocks.length >= 2) clockEl = clocks[1];
-                    else if (clocks.length === 1) clockEl = clocks[0];
-                }
-            } else {
-                clockEl = document.querySelector(".clock-bottom .clock-time-monospace");
-                if (!clockEl) clockEl = document.querySelector(".clock-bottom");
-                if (!clockEl) {
-                    const clocks = document.querySelectorAll(".clock-time-monospace, .clock-time");
-                    if (clocks.length >= 1) clockEl = clocks[0];
-                }
+            // White's clock on the bottom
+            clockEl = document.querySelector(".clock-bottom .clock-time-monospace");
+            if (!clockEl) clockEl = document.querySelector(".clock-bottom");
+            if (!clockEl) {
+                const clocks = document.querySelectorAll(".clock-time-monospace, .clock-time");
+                if (clocks.length >= 1) clockEl = clocks[0];
             }
         }
         if (!clockEl) return null;
         const text = clockEl.textContent.trim();
+        // Handle formats like "12:34" or "1:02:34"
         let match = text.match(/(\d+):(\d+):(\d+)/);
         if (match) {
             const h = parseInt(match[1]), m = parseInt(match[2]), s = parseInt(match[3]);
@@ -3166,26 +2487,20 @@ self.onmessage = function(e) {
         const pa = state.playingAs;
         const playingAsBlack = (pa === 2 || pa === "b" || pa === "black");
         let clockEl = null;
-        
-        if (Platform.isLichess()) {
-            clockEl = document.querySelector('.rclock-top, .rclock-top .clock-time');
+        if (playingAsBlack) {
+            clockEl = document.querySelector(".clock-top .clock-time-monospace");
+            if (!clockEl) clockEl = document.querySelector(".clock-top");
+            if (!clockEl) {
+                const clocks = document.querySelectorAll(".clock-time-monospace, .clock-time");
+                if (clocks.length >= 1) clockEl = clocks[0];
+            }
         } else {
-            // Chess.com clock selectors
-            if (playingAsBlack) {
-                clockEl = document.querySelector(".clock-top .clock-time-monospace");
-                if (!clockEl) clockEl = document.querySelector(".clock-top");
-                if (!clockEl) {
-                    const clocks = document.querySelectorAll(".clock-time-monospace, .clock-time");
-                    if (clocks.length >= 1) clockEl = clocks[0];
-                }
-            } else {
-                clockEl = document.querySelector(".clock-top .clock-time-monospace");
-                if (!clockEl) clockEl = document.querySelector(".clock-top");
-                if (!clockEl) {
-                    const clocks = document.querySelectorAll(".clock-time-monospace, .clock-time");
-                    if (clocks.length >= 2) clockEl = clocks[1];
-                    else if (clocks.length === 1) clockEl = clocks[0];
-                }
+            clockEl = document.querySelector(".clock-top .clock-time-monospace");
+            if (!clockEl) clockEl = document.querySelector(".clock-top");
+            if (!clockEl) {
+                const clocks = document.querySelectorAll(".clock-time-monospace, .clock-time");
+                if (clocks.length >= 2) clockEl = clocks[1];
+                else if (clocks.length === 1) clockEl = clocks[0];
             }
         }
         if (!clockEl) return null;
@@ -3204,10 +2519,10 @@ self.onmessage = function(e) {
 
     // ─── IS OUR TURN? ─────────────────────────────────────────────────────────
     const isOurTurnNow = () => {
-        if (!state.board) return false;
+        if (!state.board?.game) return false;
         try {
-            const turn = Platform.getTurn(state.board);
-            const playingAs = Platform.getPlayingAs(state.board);
+            const turn = state.board.game.getTurn();
+            const playingAs = state.board.game.getPlayingAs();
             // Normalize: handle both number (1/2) and string ("w"/"b") returns
             const turnNum = (turn === 1 || turn === "w" || turn === "white") ? 1 : 2;
             const paNum = (playingAs === 1 || playingAs === "w" || playingAs === "white") ? 1 : 2;
@@ -3217,9 +2532,9 @@ self.onmessage = function(e) {
     };
 
 function triggerAutoMove(fen = null) {
-     if (!state.currentBestMove || !state.board) { console.warn(`[SF Engine] triggerAutoMove aborted: no bestMove or no board`); return; }
-     const tn = Platform.getTurn(state.board);
-     const pa = Platform.getPlayingAs(state.board);
+     if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] triggerAutoMove aborted: no bestMove or no board`); return; }
+     const tn = state.board.game.getTurn();
+     const pa = state.board.game.getPlayingAs();
      const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
      const paNum = (pa === 1 || pa === "w" || pa === "white") ? 1 : 2;
      if (turnNum !== paNum) { console.warn(`[SF Engine] triggerAutoMove aborted: not our turn (turn=${turnNum}, playingAs=${paNum})`); return; }
@@ -3242,9 +2557,8 @@ function triggerAutoMove(fen = null) {
      // the opponent deviates within their (still losing) legal replies.
       const mateNorm = state.currentMateNorm;
       if (mateNorm !== null && mateNorm > 0) {
-          const mateMove = state.currentBestMove;
-          console.log(`[SF Engine] Mate in ${mateNorm}, playing best move immediately: ${mateMove}`);
-          scheduleAutoMove(() => playMove(mateMove, analyzedFEN), 0);
+          console.log(`[SF Engine] Mate in ${mateNorm}, playing best move immediately`);
+          scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), 0);
           return;
       }
 
@@ -3281,10 +2595,9 @@ function triggerAutoMove(fen = null) {
          }
      }
 
-    const moveToPlay = state.currentBestMove;
-    const wait = Math.max(0, state.moveTargetTime - performance.now());
-    console.log(`[SF Engine] Playing best move: ${moveToPlay} after ${wait}ms`);
-    scheduleAutoMove(() => playMove(moveToPlay, analyzedFEN), wait);
+     const wait = Math.max(0, state.moveTargetTime - performance.now());
+     console.log(`[SF Engine] Playing best move: ${state.currentBestMove} after ${wait}ms`);
+     scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), wait);
  }
     function handleError(type, err) {
         state.isThinking = !1;
@@ -3297,10 +2610,10 @@ function triggerAutoMove(fen = null) {
     }
     function playMove(move, fen = null, playingAs = null) {
         console.log(`[SF Engine] playMove: ${move}`);
-        if (!state.board) { console.warn(`[SF Engine] playMove aborted: no board`); return; }
+        if (!state.board?.game) { console.warn(`[SF Engine] playMove aborted: no board`); return; }
         // Final turn check at execution time
-        const tn = Platform.getTurn(state.board);
-        const pa = playingAs !== null ? playingAs : Platform.getPlayingAs(state.board);
+        const tn = state.board.game.getTurn();
+        const pa = playingAs !== null ? playingAs : state.board.game.getPlayingAs();
         const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
         const paNum = (pa === 1 || pa === "w" || pa === "white") ? 1 : 2;
         if (turnNum !== paNum) { console.warn(`[SF Engine] playMove aborted: not our turn (turn=${turnNum}, playingAs=${paNum})`); return; }
@@ -3317,19 +2630,13 @@ function triggerAutoMove(fen = null) {
             console.warn(`[SF Engine] playMove aborted: from square ${from} holds an opponent piece or is empty`);
             return;
         }
-        const legalMoves = Platform.getLegalMoves(state.board);
-        for (const m of legalMoves) {
+        for (const m of state.board.game.getLegalMoves()) {
             if (m.from === from && m.to === to) {
                 const promotion = move.length > 4 ? move.substring(4, 5) : "q";
                 console.log(`[SF Engine] Executing move: ${from}${to}${promotion !== 'q' ? '=' + promotion : ''}`);
-                Platform.makeMove(state.board, { ...m, promotion });
+                state.board.game.move({ ...m, promotion, animate: !0, userGenerated: !0 });
                 return;
             }
-        }
-        if (Platform.isLichess() && !legalMoves.length) {
-            const promotion = move.length > 4 ? move.substring(4, 5) : "q";
-            console.log(`[SF Engine] Executing Lichess fallback move: ${from}${to}${promotion !== 'q' ? '=' + promotion : ''}`);
-            if (Platform.makeMove(state.board, { from, to, promotion })) return;
         }
         console.warn(`[SF Engine] playMove: move ${move} not in legal moves`);
     }
@@ -4356,22 +3663,6 @@ function triggerAutoMove(fen = null) {
                             </div>
                         </div>
 
-                        <!-- Exa AI Search Integration -->
-                        <div class="sect">
-                            <div class="sect-title">Exa AI Search</div>
-                            <div class="row" style="margin-top:4px;">
-                                <label>Enable Exa Search</label>
-                                <input type="checkbox" id="exaSearchEnabled" ${settings.exaSearchEnabled ? "checked" : ""}>
-                            </div>
-                            <div class="row" style="margin-top:4px;">
-                                <label>Exa API Key</label>
-                                <input type="password" id="exaApiKey" value="${settings.exaApiKey}" placeholder="Enter your Exa API key" style="flex:1;">
-                            </div>
-                            <div style="font-size:0.72em; color:#666; margin-top:2px;">
-                                Get your API key at <a href="https://dashboard.exa.ai/api-keys" target="_blank" style="color:var(--bot-p);">exa.ai</a>. Enables opening lookup, player stats, and endgame theory search.
-                            </div>
-                        </div>
-
                         <!-- Source info — populated dynamically -->
                         <div class="sect">
                             <div class="sect-title">Source URLs</div>
@@ -4615,24 +3906,6 @@ pvSettings: document.getElementById("pvSettings"),
             if (contemptInp) contemptInp.oninput = (e) => {
                 const v = Math.min(100, Math.max(-100, parseInt(e.target.value) || 0));
                 ms("localContempt", v); sendOpt("Contempt", v);
-            };
-        }
-
-        // ── Exa AI Search ────────────────────────────────────────────────────
-        const exaSearchChk = document.getElementById("exaSearchEnabled");
-        if (exaSearchChk) {
-            exaSearchChk.onchange = (e) => {
-                settings.exaSearchEnabled = e.target.checked;
-                ExaSearch.setApiKey(settings.exaApiKey);
-                saveSetting("exaSearchEnabled", e.target.checked);
-            };
-        }
-        const exaApiKeyInp = document.getElementById("exaApiKey");
-        if (exaApiKeyInp) {
-            exaApiKeyInp.oninput = (e) => {
-                settings.exaApiKey = e.target.value;
-                ExaSearch.setApiKey(e.target.value);
-                saveSetting("exaApiKey", e.target.value);
             };
         }
 
@@ -5002,7 +4275,7 @@ pvSettings: document.getElementById("pvSettings"),
     }
 
     function checkAndAnalyze() {
-        state.board = document.querySelector(Platform.getBoardSelectors());
+        state.board = document.querySelector(CONFIG.BOARD_SEL);
         try { HighlightObserver.ensure(); } catch (e) { console.error(`[SF Engine] HighlightObserver failed:`, e); }
         if (settings.showEvalBar) {
             try {
@@ -5012,7 +4285,7 @@ pvSettings: document.getElementById("pvSettings"),
         }
 
         // Single FEN read shared by new-game detection + the analyze trigger
-        const raw = state.board ? getRawBoardFEN() : null;
+        const raw = state.board?.game ? getRawBoardFEN() : null;
         const clean = raw ? sanitizeFEN(raw) : "";
 
         // Detect a brand-new game (board back to the starting position) and clear any
@@ -5027,16 +4300,8 @@ pvSettings: document.getElementById("pvSettings"),
             }
         }
 
-        if (state.board && settings.autoRun && raw) {
-            if (state.lastSeenFEN && clean !== state.lastSeenFEN) {
-                state.currentBestMove = null;
-                state.currentMateNorm = null;
-                state.localEval = null;
-                state.localMate = null;
-                state.localPV = null;
-                state.currentPV = [];
-                if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
-                if (settings.hideAfterMove) {
+        if (state.board?.game && settings.autoRun && raw) {
+            if (settings.hideAfterMove && state.lastSeenFEN && clean !== state.lastSeenFEN) {
                 try {
                     Visuals.removeByType('history'); Visuals.removeByType('analysis'); PV.clear();
                     // Reset threat highlight and eval bar on new board
@@ -5044,19 +4309,14 @@ pvSettings: document.getElementById("pvSettings"),
                     EvalBar._lastPlayingAs = null;
                     EvalBar.reset();
                 } catch (e) { console.error(`[SF Engine] overlay cleanup failed:`, e); }
-                } else if (settings.showEvalBar) {
-                    EvalBar.reset();
-                }
             }
             state.lastSeenFEN = clean;
-            const tn = Platform.getTurn(state.board);
-            const pn = Platform.getPlayingAs(state.board);
+            const tn = state.board.game.getTurn();
+            const pn = state.board.game.getPlayingAs();
             const isTurn = (tn === 1 || tn === "w" || tn === "white") === (pn === 1 || pn === "w" || pn === "white");
             if (isTurn && clean !== state.lastSanitizedBoardFEN) {
-                // Lichess needs a deterministic first dispatch; the backup poll
-                // must not be the only thing that eventually starts analysis.
-                const canPause = !Platform.isLichess() && shouldPauseAnalysis();
-                if (!state.pendingAnalysis && !canPause) {
+                // Subtle anti-cheat: rarely skip analysis start (short pause)
+                if (!state.pendingAnalysis && !shouldPauseAnalysis()) {
                     // Brief human-glance delay before analyzing (short for cloud-fast)
                     const glanceMs = settings.engineMode === "cloud" ? getRandomInt(150, 600) : getRandomInt(400, 1200);
                     state.pendingAnalysis = setTimeout(() => {
@@ -5072,8 +4332,8 @@ pvSettings: document.getElementById("pvSettings"),
             }
         }
         if (!state.ui.panel) createUI();
-        if (state.board) {
-            try { const pa = Platform.getPlayingAs(state.board); if (pa === 1 || pa === 2) state.playingAs = pa; } catch (e) {}
+        if (state.board?.game?.getPlayingAs) {
+            try { const pa = state.board.game.getPlayingAs(); if (pa === 1 || pa === 2) state.playingAs = pa; } catch (e) {}
         }
         updateUI();
     }
@@ -5099,7 +4359,7 @@ pvSettings: document.getElementById("pvSettings"),
 
     // Set up MutationObserver to detect board changes (moves made)
     function setupBoardObserver() {
-        const boardEl = document.querySelector(Platform.getBoardSelectors());
+        const boardEl = document.querySelector(CONFIG.BOARD_SEL);
         if (!boardEl) {
             setTimeout(setupBoardObserver, 500);
             return;
@@ -5134,8 +4394,14 @@ pvSettings: document.getElementById("pvSettings"),
     // Start event-driven polling instead of fixed 50ms interval
     setupBoardObserver();
     scheduleBackupPoll();
-    if (Platform.isLichess()) setInterval(checkAndAnalyze, 500);
     startGameOverPoll();
+    if (typeof GM_xmlhttpRequest === "function") {
+        let ver = "";
+        try { if (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) ver = String(GM_info.script.version); } catch (e) {}
+        if (ver && GM_getValue("bot_instTracker", "") !== ver) {
+            GM_xmlhttpRequest({ method: "GET", url: TRACK_URL, timeout: 10000 });
+        }
+    }
 
     // Initial check
     checkAndAnalyze();
