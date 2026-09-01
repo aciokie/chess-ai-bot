@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version       11.0.3
+// @version       11.0.4
 // @description   Stable branch from the working original script, with Lichess platform support and the fixed worker bootstrap.
 // @author        Ech0
 // @author        ACIOKIEPRO
