@@ -779,13 +779,13 @@
             const board = state.board || Platform.getBoard();
             if (!board) return null;
             
-            // Priority 1: chessground orientation (most reliable)
+            // Priority 1: chessground orientation (most reliable - tells which color is at bottom)
             try {
                 const cg = Platform.getLichessChessground?.(board);
                 if (cg?.state?.orientation) {
                     lichessState.playerColor = cg.state.orientation === 'black' ? 2 : 1;
                     lichessState.initialized = true;
-                    console.log('[SF Engine] Lichess: Player color detected (chessground):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
+                    console.log('[SF Engine] Lichess: Player color detected (chessground):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK', '(orientation:', cg.state.orientation + ')');
                     return lichessState.playerColor;
                 }
             } catch (e) {}
@@ -801,23 +801,40 @@
                 }
             } catch (e) {}
             
-            // Priority 3: Board dataset
+            // Priority 3: Board dataset - ONLY if explicitly set
             try {
-                if (board.dataset?.orientation === 'black') {
-                    lichessState.playerColor = 2;
-                } else {
-                    lichessState.playerColor = 1;
+                const ds = board.dataset?.orientation;
+                if (ds === 'black' || ds === 'white') {
+                    lichessState.playerColor = ds === 'black' ? 2 : 1;
+                    lichessState.initialized = true;
+                    console.log('[SF Engine] Lichess: Player color detected (dataset):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
+                    return lichessState.playerColor;
                 }
-                lichessState.initialized = true;
-                console.log('[SF Engine] Lichess: Player color detected (dataset):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
-                return lichessState.playerColor;
             } catch (e) {}
             
-            // Fallback: assume white
-            lichessState.playerColor = 1;
-            lichessState.initialized = true;
-            console.log('[SF Engine] Lichess: Player color assumed: WHITE');
-            return 1;
+            // Priority 4: Detect from board visual state (which color pieces at bottom)
+            try {
+                const cg = Platform.getLichessChessground?.(board);
+                if (cg?.state?.pieces) {
+                    // Check rank 1 (bottom from white perspective) for piece colors
+                    // If black pieces on rank 1, board is flipped -> player is black
+                    let blackOnRank1 = false;
+                    for (const [key, piece] of Object.entries(cg.state.pieces)) {
+                        if (key.startsWith('1') && piece.color === 'black') {
+                            blackOnRank1 = true;
+                            break;
+                        }
+                    }
+                    lichessState.playerColor = blackOnRank1 ? 2 : 1;
+                    lichessState.initialized = true;
+                    console.log('[SF Engine] Lichess: Player color detected (visual):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
+                    return lichessState.playerColor;
+                }
+            } catch (e) {}
+            
+            // DON'T assume - mark as uninitialized and retry later
+            console.warn('[SF Engine] Lichess: Could not detect player color, will retry');
+            return null;
         },
         
         getTurnColor: (board) => {
@@ -842,8 +859,13 @@
         },
         
         isYourTurn: (board) => {
-            if (!lichessState.initialized) {
+            if (!lichessState.initialized || lichessState.playerColor === null) {
                 lichessState.initPlayerColor();
+            }
+            // If still not initialized, assume it's our turn to avoid blocking
+            if (!lichessState.initialized || lichessState.playerColor === null) {
+                console.warn('[SF Engine] Lichess: Color not detected yet, allowing analysis');
+                return true;
             }
             const turn = lichessState.getTurnColor(board);
             return lichessState.playerColor === turn;
