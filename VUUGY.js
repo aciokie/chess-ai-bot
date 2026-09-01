@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version       11.0.7
+// @version       11.0.8
 // @description   Stable branch from the working original script, with Lichess platform support and the fixed worker bootstrap.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -245,6 +245,15 @@
             
             const cg = Platform.getLichessChessground(board);
             console.log('[SF Engine] Lichess: chessground:', cg ? 'found' : 'null', '| state:', cg?.state ? 'exists' : 'null');
+            
+            // Debug: check board element for chessground
+            if (!cg) {
+                console.log('[SF Engine] Lichess: board keys:', board ? Object.keys(board).filter(k => k.toLowerCase().includes('chess')) : 'no board');
+                console.log('[SF Engine] Lichess: board.chessground:', board?.chessground ? 'exists' : 'null');
+                console.log('[SF Engine] Lichess: board._chessground:', board?._chessground ? 'exists' : 'null');
+                console.log('[SF Engine] Lichess: board.__chessground:', board?.__chessground ? 'exists' : 'null');
+                if (window.domData) console.log('[SF Engine] Lichess: domData.get:', window.domData.get(board, 'chessground') ? 'exists' : 'null');
+            }
             
             // 4. If API gave us color, cross-check with board orientation
             if (cg?.state?.orientation && playerColor !== null) {
@@ -873,8 +882,17 @@ initPlayerColor: () => {
                 return lichessState.playerColor;
             }
             
-            // If lichess object not ready yet, schedule retry
-            if (!window.lichess) {
+            // If chessground not ready yet, schedule retry
+            const cg = Platform.getLichessChessground(board);
+            if (!cg || !cg.state) {
+                console.log('[SF Engine] Lichess: chessground not ready, scheduling retry in 500ms');
+                if (!lichessState._retryTimeout) {
+                    lichessState._retryTimeout = setTimeout(() => {
+                        lichessState._retryTimeout = null;
+                        lichessState.initPlayerColor();
+                    }, 500);
+                }
+            } else if (!window.lichess) {
                 console.log('[SF Engine] Lichess: window.lichess not ready, scheduling retry in 500ms');
                 if (!lichessState._retryTimeout) {
                     lichessState._retryTimeout = setTimeout(() => {
