@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version       11.0.4
+// @version       11.0.5
 // @description   Stable branch from the working original script, with Lichess platform support and the fixed worker bootstrap.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -219,7 +219,20 @@
         },
 
         getLichessPlayerColor: (board) => {
-            // 1. Get player color from Lichess API (GROUND TRUTH)
+            // 1. Try HTML page data attributes first (available before JS loads)
+            const htmlColor = document.querySelector('meta[name="lichess-player-color"]')?.content
+                           || document.body?.dataset?.playerColor
+                           || document.documentElement?.dataset?.playerColor;
+            if (htmlColor === 'white' || htmlColor === 'w') return 1;
+            if (htmlColor === 'black' || htmlColor === 'b') return 2;
+            
+            // 2. Wait for lichess object to be available
+            if (!window.lichess) {
+                console.log('[SF Engine] Lichess: window.lichess not yet available, will retry');
+                return null;
+            }
+            
+            // 3. Get player color from Lichess API (GROUND TRUTH)
             const apiColor = window.lichess?.data?.player?.color 
                           || window.lichess?.round?.data?.player?.color 
                           || window.lichess?.round?.data?.playerColor
@@ -816,7 +829,7 @@
         playerColor: null,
         initialized: false,
         
-        initPlayerColor: () => {
+initPlayerColor: () => {
             if (lichessState.initialized && lichessState.playerColor !== null) return lichessState.playerColor;
             
             const board = state.board || Platform.getBoard();
@@ -831,7 +844,18 @@
                 return lichessState.playerColor;
             }
             
-            console.warn('[SF Engine] Lichess: Could not detect player color, will retry');
+            // If lichess object not ready yet, schedule retry
+            if (!window.lichess) {
+                console.log('[SF Engine] Lichess: window.lichess not ready, scheduling retry in 500ms');
+                if (!lichessState._retryTimeout) {
+                    lichessState._retryTimeout = setTimeout(() => {
+                        lichessState._retryTimeout = null;
+                        lichessState.initPlayerColor();
+                    }, 500);
+                }
+            } else {
+                console.warn('[SF Engine] Lichess: Could not detect player color, will retry');
+            }
             return null;
         },
         
