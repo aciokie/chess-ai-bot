@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version       11.0.8
+// @version       11.0.9
 // @description   Stable branch from the working original script, with Lichess platform support and the fixed worker bootstrap.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -931,10 +931,10 @@ initPlayerColor: () => {
             if (!lichessState.initialized || lichessState.playerColor === null) {
                 lichessState.initPlayerColor();
             }
-            // If still not initialized, assume it's our turn to avoid blocking
+            // If still not initialized, DON'T analyze - wait for proper detection
             if (!lichessState.initialized || lichessState.playerColor === null) {
-                console.warn('[SF Engine] Lichess: Color not detected yet, allowing analysis');
-                return true;
+                console.log('[SF Engine] Lichess: Color not detected yet, skipping analysis');
+                return false;
             }
             const turn = lichessState.getTurnColor(board);
             return lichessState.playerColor === turn;
