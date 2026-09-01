@@ -219,21 +219,44 @@
         },
 
         getLichessPlayerColor: (board) => {
-            const candidates = [
-                window.lichess?.data?.player?.color,
-                window.lichess?.round?.data?.player?.color,
-                window.lichess?.round?.data?.playerColor,
-                window.lichess?.game?.data?.player?.color,
-                board?.dataset?.orientation
-            ];
-            for (const candidate of candidates) {
-                if (candidate === 'white' || candidate === 'w') return 1;
-                if (candidate === 'black' || candidate === 'b') return 2;
-            }
+            // Priority 1: Lichess API (most reliable)
+            const apiColor = window.lichess?.data?.player?.color 
+                          || window.lichess?.round?.data?.player?.color 
+                          || window.lichess?.round?.data?.playerColor
+                          || window.lichess?.game?.data?.player?.color;
+            if (apiColor === 'white' || apiColor === 'w') return 1;
+            if (apiColor === 'black' || apiColor === 'b') return 2;
+            
+            // Priority 2: chessground orientation (which color at bottom = player color)
             const cg = Platform.getLichessChessground(board);
-            if (cg?.state?.orientation) return cg.state.orientation === 'white' ? 1 : 2;
+            if (cg?.state?.orientation) {
+                return cg.state.orientation === 'white' ? 1 : 2;
+            }
+            
+            // Priority 3: Board dataset orientation
+            const ds = board?.dataset?.orientation;
+            if (ds === 'white') return 1;
+            if (ds === 'black') return 2;
+            
+            // Priority 4: DOM class (orientation-black means black at bottom = player is black)
             const oriented = board?.closest?.('.orientation-black');
-            return oriented ? 2 : 1;
+            if (oriented) return 2;
+            
+            // Priority 5: Check piece positions on rank 1
+            try {
+                if (cg?.state?.pieces) {
+                    let blackOnRank1 = false;
+                    for (const [key, piece] of Object.entries(cg.state.pieces)) {
+                        if (key.startsWith('1') && piece.color === 'black') {
+                            blackOnRank1 = true;
+                            break;
+                        }
+                    }
+                    return blackOnRank1 ? 2 : 1;
+                }
+            } catch (e) {}
+            
+            return null; // Don't assume - let caller handle
         },
 
         getFEN: (board) => {
@@ -774,65 +797,20 @@
         initialized: false,
         
         initPlayerColor: () => {
-            if (lichessState.initialized) return lichessState.playerColor;
+            if (lichessState.initialized && lichessState.playerColor !== null) return lichessState.playerColor;
             
             const board = state.board || Platform.getBoard();
             if (!board) return null;
             
-            // Priority 1: chessground orientation (most reliable - tells which color is at bottom)
-            try {
-                const cg = Platform.getLichessChessground?.(board);
-                if (cg?.state?.orientation) {
-                    lichessState.playerColor = cg.state.orientation === 'black' ? 2 : 1;
-                    lichessState.initialized = true;
-                    console.log('[SF Engine] Lichess: Player color detected (chessground):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK', '(orientation:', cg.state.orientation + ')');
-                    return lichessState.playerColor;
-                }
-            } catch (e) {}
+            // Use the SAME reliable detection as Platform.getLichessPlayerColor()
+            const detectedColor = Platform.getLichessPlayerColor(board);
+            if (detectedColor === 1 || detectedColor === 2) {
+                lichessState.playerColor = detectedColor;
+                lichessState.initialized = true;
+                console.log('[SF Engine] Lichess: Player color detected (unified):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
+                return lichessState.playerColor;
+            }
             
-            // Priority 2: Lichess API
-            try {
-                const color = window.lichess?.data?.player?.color || window.lichess?.round?.data?.player?.color;
-                if (color) {
-                    lichessState.playerColor = color === 'black' ? 2 : 1;
-                    lichessState.initialized = true;
-                    console.log('[SF Engine] Lichess: Player color detected (API):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
-                    return lichessState.playerColor;
-                }
-            } catch (e) {}
-            
-            // Priority 3: Board dataset - ONLY if explicitly set
-            try {
-                const ds = board.dataset?.orientation;
-                if (ds === 'black' || ds === 'white') {
-                    lichessState.playerColor = ds === 'black' ? 2 : 1;
-                    lichessState.initialized = true;
-                    console.log('[SF Engine] Lichess: Player color detected (dataset):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
-                    return lichessState.playerColor;
-                }
-            } catch (e) {}
-            
-            // Priority 4: Detect from board visual state (which color pieces at bottom)
-            try {
-                const cg = Platform.getLichessChessground?.(board);
-                if (cg?.state?.pieces) {
-                    // Check rank 1 (bottom from white perspective) for piece colors
-                    // If black pieces on rank 1, board is flipped -> player is black
-                    let blackOnRank1 = false;
-                    for (const [key, piece] of Object.entries(cg.state.pieces)) {
-                        if (key.startsWith('1') && piece.color === 'black') {
-                            blackOnRank1 = true;
-                            break;
-                        }
-                    }
-                    lichessState.playerColor = blackOnRank1 ? 2 : 1;
-                    lichessState.initialized = true;
-                    console.log('[SF Engine] Lichess: Player color detected (visual):', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
-                    return lichessState.playerColor;
-                }
-            } catch (e) {}
-            
-            // DON'T assume - mark as uninitialized and retry later
             console.warn('[SF Engine] Lichess: Could not detect player color, will retry');
             return null;
         },
