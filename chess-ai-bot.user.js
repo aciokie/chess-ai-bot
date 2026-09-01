@@ -219,6 +219,11 @@
         },
 
         getLichessPlayerColor: (board) => {
+            // Debug: log what's available on window.lichess
+            console.log('[SF Engine] Lichess: window.lichess keys:', window.lichess ? Object.keys(window.lichess) : 'null');
+            if (window.lichess?.data) console.log('[SF Engine] Lichess: data keys:', Object.keys(window.lichess.data));
+            if (window.lichess?.round) console.log('[SF Engine] Lichess: round keys:', Object.keys(window.lichess.round));
+            
             // 1. Get player color from Lichess API (GROUND TRUTH)
             const apiColor = window.lichess?.data?.player?.color 
                           || window.lichess?.round?.data?.player?.color 
