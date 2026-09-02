@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version       11.0.11
+// @version       11.0.12
 // @description   Stable branch from the working original script, with Lichess platform support and the fixed worker bootstrap.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -948,18 +948,20 @@
                 return lichessState.playerColor;
             }
             
-            // If chessground not ready yet, schedule retry
-            const cg = Platform.getLichessChessground(board);
-            if (!cg || !cg.state) {
-                console.log('[SF Engine] Lichess: chessground not ready, scheduling retry in 500ms');
-                if (!lichessState._retryTimeout) {
-                    lichessState._retryTimeout = setTimeout(() => {
-                        lichessState._retryTimeout = null;
-                        lichessState.initPlayerColor();
-                    }, 500);
-                }
-            } else if (!window.lichess) {
-                console.log('[SF Engine] Lichess: window.lichess not ready, scheduling retry in 500ms');
+            // If standard detection failed, try DOM piece detection IMMEDIATELY (for AI games)
+            console.log('[SF Engine] Lichess: Standard detection failed, trying DOM piece detection...');
+            const domColor = Platform.getLichessColorFromDOMPieces(board);
+            if (domColor === 1 || domColor === 2) {
+                lichessState.playerColor = domColor;
+                lichessState.initialized = true;
+                console.log('[SF Engine] Lichess: Player color detected via DOM pieces:', lichessState.playerColor === 1 ? 'WHITE' : 'BLACK');
+                return lichessState.playerColor;
+            }
+            
+            // If still not detected, schedule ONE retry (max 3 attempts)
+            lichessState._retryCount = (lichessState._retryCount || 0) + 1;
+            if (lichessState._retryCount <= 3) {
+                console.log('[SF Engine] Lichess: Color detection failed, retry attempt', lichessState._retryCount, '/3');
                 if (!lichessState._retryTimeout) {
                     lichessState._retryTimeout = setTimeout(() => {
                         lichessState._retryTimeout = null;
@@ -967,7 +969,9 @@
                     }, 500);
                 }
             } else {
-                console.warn('[SF Engine] Lichess: Could not detect player color, will retry');
+                console.warn('[SF Engine] Lichess: All detection methods failed after 3 attempts, giving up');
+                lichessState.initialized = true; // Mark as initialized to stop retrying
+                lichessState.playerColor = null;
             }
             return null;
         },
