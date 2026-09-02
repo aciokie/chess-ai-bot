@@ -119,8 +119,32 @@
         // NEW: Detect player color from DOM piece positions (for AI games where chessground not accessible)
         getLichessColorFromDOMPieces: (board) => {
             if (!board) return null;
-            const pieces = board?.querySelectorAll?.('piece') || document.querySelectorAll('cg-board piece');
-            if (!pieces.length) return null;
+            
+            // Get pieces from shadow DOM or light DOM
+            let pieces = [];
+            try {
+                // Try light DOM first (for lichess-board)
+                pieces = board.querySelectorAll('piece');
+                if (!pieces.length) {
+                    // Try shadow DOM (for cg-board)
+                    if (board.shadowRoot) {
+                        pieces = board.shadowRoot.querySelectorAll('piece');
+                    }
+                }
+                if (!pieces.length) {
+                    // Fallback: global search
+                    pieces = document.querySelectorAll('cg-board piece, lichess-board piece, piece');
+                }
+            } catch (e) {
+                pieces = document.querySelectorAll('piece');
+            }
+            
+            if (!pieces.length) {
+                console.log('[SF Engine] Lichess: DOM piece detection - no pieces found');
+                return null;
+            }
+            
+            console.log('[SF Engine] Lichess: DOM piece detection - found', pieces.length, 'pieces');
             
             // Analyze piece positions to determine board orientation
             // White pieces at bottom (higher y) = White at bottom = Player is White
@@ -145,12 +169,21 @@
                         const is3d = matrixMatch[0].startsWith('matrix3d');
                         const yVal = is3d ? values[13] : values[5];
                         const height = piece.clientHeight || piece.offsetHeight;
-                        const boardHeight = document.querySelector('cg-board, lichess-board')?.clientHeight || window.innerHeight;
+                        const boardEl = document.querySelector('cg-board, lichess-board');
+                        const boardHeight = boardEl?.clientHeight || window.innerHeight;
                         if (height && boardHeight) {
                             y = Math.round((yVal / boardHeight) * 100);
-                        } else {
-                            y = parseFloat(percentMatch?.[2] || 0);
                         }
+                    }
+                }
+                
+                // Fallback: use getBoundingClientRect
+                if (y === 0) {
+                    const rect = piece.getBoundingClientRect();
+                    const boardEl = document.querySelector('cg-board, lichess-board');
+                    const boardRect = boardEl?.getBoundingClientRect();
+                    if (boardRect && boardRect.height > 0) {
+                        y = Math.round(((rect.top + rect.height / 2) - boardRect.top) / boardRect.height * 100);
                     }
                 }
                 
@@ -163,14 +196,17 @@
                 }
             }
             
-            if (whiteCount === 0 || blackCount === 0) return null;
+            if (whiteCount === 0 || blackCount === 0) {
+                console.log('[SF Engine] Lichess: DOM piece detection - missing color pieces, whiteCount:', whiteCount, 'blackCount:', blackCount);
+                return null;
+            }
             
             const avgWhiteY = whiteYSum / whiteCount;
             const avgBlackY = blackYSum / blackCount;
             
             // Higher Y = lower on screen (bottom)
             // If white pieces have higher average Y, they're at bottom = player is White
-            console.log('[SF Engine] Lichess: DOM piece detection - avgWhiteY:', avgWhiteY.toFixed(1), 'avgBlackY:', avgBlackY.toFixed(1));
+            console.log('[SF Engine] Lichess: DOM piece detection - avgWhiteY:', avgWhiteY.toFixed(1), 'avgBlackY:', avgBlackY.toFixed(1), 'whiteCount:', whiteCount, 'blackCount:', blackCount);
             return avgWhiteY > avgBlackY ? 1 : 2; // 1=white, 2=black
         },
 
