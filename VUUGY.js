@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version       11.0.10
+// @version       11.0.11
 // @description   Stable branch from the working original script, with Lichess platform support and the fixed worker bootstrap.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -114,6 +114,64 @@
         getLichessOrientation: (board) => {
             const wrapper = board?.closest?.('.cg-wrap');
             return wrapper?.classList.contains('orientation-black') ? 'black' : 'white';
+        },
+
+        // NEW: Detect player color from DOM piece positions (for AI games where chessground not accessible)
+        getLichessColorFromDOMPieces: (board) => {
+            if (!board) return null;
+            const pieces = board?.querySelectorAll?.('piece') || document.querySelectorAll('cg-board piece');
+            if (!pieces.length) return null;
+            
+            // Analyze piece positions to determine board orientation
+            // White pieces at bottom (higher y) = White at bottom = Player is White
+            // Black pieces at bottom = Black at bottom = Player is Black
+            let whiteYSum = 0, whiteCount = 0;
+            let blackYSum = 0, blackCount = 0;
+            
+            for (const piece of pieces) {
+                const names = [...piece.classList];
+                const color = names.includes('white') ? 'white' : names.includes('black') ? 'black' : null;
+                if (!color) continue;
+                
+                const transform = piece.style.transform || getComputedStyle(piece).transform || '';
+                let y = 0;
+                const percentMatch = transform.match(/translate(?:3d)?\(\s*(-?\d+(?:\.\d+)?)%[, ]+\s*(-?\d+(?:\.\d+)?)%/);
+                if (percentMatch) {
+                    y = parseFloat(percentMatch[2]);
+                } else {
+                    const matrixMatch = transform.match(/matrix(?:3d)?\(([^)]+)\)/);
+                    if (matrixMatch) {
+                        const values = matrixMatch[1].split(',').map(Number);
+                        const is3d = matrixMatch[0].startsWith('matrix3d');
+                        const yVal = is3d ? values[13] : values[5];
+                        const height = piece.clientHeight || piece.offsetHeight;
+                        const boardHeight = document.querySelector('cg-board, lichess-board')?.clientHeight || window.innerHeight;
+                        if (height && boardHeight) {
+                            y = Math.round((yVal / boardHeight) * 100);
+                        } else {
+                            y = parseFloat(percentMatch?.[2] || 0);
+                        }
+                    }
+                }
+                
+                if (color === 'white') {
+                    whiteYSum += y;
+                    whiteCount++;
+                } else if (color === 'black') {
+                    blackYSum += y;
+                    blackCount++;
+                }
+            }
+            
+            if (whiteCount === 0 || blackCount === 0) return null;
+            
+            const avgWhiteY = whiteYSum / whiteCount;
+            const avgBlackY = blackYSum / blackCount;
+            
+            // Higher Y = lower on screen (bottom)
+            // If white pieces have higher average Y, they're at bottom = player is White
+            console.log('[SF Engine] Lichess: DOM piece detection - avgWhiteY:', avgWhiteY.toFixed(1), 'avgBlackY:', avgBlackY.toFixed(1));
+            return avgWhiteY > avgBlackY ? 1 : 2; // 1=white, 2=black
         },
 
         getLichessDomFEN: (board) => {
