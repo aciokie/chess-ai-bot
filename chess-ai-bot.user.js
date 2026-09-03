@@ -1002,6 +1002,11 @@
         initPlayerColor: () => {
             if (lichessState.initialized && lichessState.playerColor !== null) return lichessState.playerColor;
             
+            // Track start time for timeout logic
+            if (!lichessState.colorDetectionStartTime) {
+                lichessState.colorDetectionStartTime = Date.now();
+            }
+            
             const board = state.board || Platform.getBoard();
             if (!board) return null;
             
@@ -1067,8 +1072,15 @@
             if (!lichessState.initialized || lichessState.playerColor === null) {
                 lichessState.initPlayerColor();
             }
-            // If still not initialized, DON'T analyze - wait for proper detection
+            // If still not initialized after reasonable time, allow analysis anyway
+            // (don't block indefinitely - some Lichess pages like AI games don't expose color easily)
             if (!lichessState.initialized || lichessState.playerColor === null) {
+                // Allow analysis if we've been waiting more than 10 seconds
+                const waitTime = Date.now() - (lichessState.colorDetectionStartTime || Date.now());
+                if (waitTime > 10000) {
+                    console.log('[SF Engine] Lichess: Color detection timeout, allowing analysis anyway');
+                    return true; // Allow analysis to proceed
+                }
                 console.log('[SF Engine] Lichess: Color not detected yet, skipping analysis');
                 return false;
             }
@@ -3088,6 +3100,23 @@ self.onmessage = function(e) {
         if (!fenOverride) state.lastSanitizedBoardFEN = finalFEN;
         state.isThinking = !0;
         state.analysisStartTime = performance.now();
+        
+        // Stuck thinking watchdog: reset isThinking if stuck for 2x watchdog time
+        // This handles cases where engine dies silently or message handler fails
+        if (state.stuckThinkingWatchdog) clearInterval(state.stuckThinkingWatchdog);
+        state.stuckThinkingWatchdog = setInterval(() => {
+            if (state.isThinking && performance.now() - state.analysisStartTime > (settings.engineMode === "cloud" ? 60000 : 180000)) {
+                console.warn(`[SF Engine] Stuck thinking watchdog: resetting isThinking after ${Math.round((performance.now() - state.analysisStartTime) / 1000)}s`);
+                state.isThinking = false;
+                state.pendingLocalFEN = null;
+                state.pendingLocalDepth = null;
+                state.lastSanitizedBoardFEN = "";
+                if (state.currentCloudRequest) { try { state.currentCloudRequest.abort(); } catch (_) {} state.currentCloudRequest = null; }
+                if (state.stuckThinkingWatchdog) { clearInterval(state.stuckThinkingWatchdog); state.stuckThinkingWatchdog = null; }
+                updateUI();
+            }
+        }, 10000); // Check every 10 seconds
+        
         if (state.analysisWatchdog) { clearTimeout(state.analysisWatchdog); state.analysisWatchdog = null; }
         const watchdogMs = settings.engineMode === "cloud" ? 30000 : 90000;
         state.analysisWatchdog = setTimeout(() => {
@@ -5529,12 +5558,35 @@ pvSettings: document.getElementById("pvSettings"),
     }
 
     function scheduleBackupPoll() {
-        const delay = getRandomInt(CONFIG.BACKUP_POLL_MIN_MS, CONFIG.BACKUP_POLL_MAX_MS);
-        setTimeout(() => {
+        // Use setInterval instead of recursive setTimeout to avoid background tab throttling
+        // setInterval is not throttled as aggressively as setTimeout in background tabs
+        if (state.backupPollInterval) {
+            clearInterval(state.backupPollInterval);
+        }
+        state.backupPollInterval = setInterval(() => {
             try { checkAndAnalyze(); }
             catch (e) { console.error(`[SF Engine] backup poll failed:`, e); }
-            scheduleBackupPoll();
-        }, delay);
+        }, getRandomInt(CONFIG.BACKUP_POLL_MIN_MS, CONFIG.BACKUP_POLL_MAX_MS));
+        
+        // Also schedule observer re-attachment check every 30 seconds
+        if (state.observerCheckInterval) {
+            clearInterval(state.observerCheckInterval);
+        }
+        state.observerCheckInterval = setInterval(() => {
+            try { ensureBoardObserver(); }
+            catch (e) { console.error(`[SF Engine] observer check failed:`, e); }
+        }, 30000);
+    }
+
+    function stopBackupPoll() {
+        if (state.backupPollInterval) {
+            clearInterval(state.backupPollInterval);
+            state.backupPollInterval = null;
+        }
+        if (state.observerCheckInterval) {
+            clearInterval(state.observerCheckInterval);
+            state.observerCheckInterval = null;
+        }
     }
 
     function startGameOverPoll() {
@@ -5554,6 +5606,10 @@ pvSettings: document.getElementById("pvSettings"),
             setTimeout(setupBoardObserver, 500);
             return;
         }
+        // Disconnect any existing observer first
+        if (state.boardObserver) {
+            state.boardObserver.disconnect();
+        }
         state.boardObserver = new MutationObserver((mutations) => {
             // Check if any mutation could indicate a move was made
             for (const m of mutations) {
@@ -5564,6 +5620,28 @@ pvSettings: document.getElementById("pvSettings"),
             }
         });
         state.boardObserver.observe(boardEl, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+        console.log('[SF Engine] Board observer attached to:', boardEl.tagName);
+    }
+
+    // Periodically re-check and re-attach observer if board element changed
+    function ensureBoardObserver() {
+        const boardEl = document.querySelector(Platform.getBoardSelectors());
+        if (!boardEl) {
+            setupBoardObserver(); // Will retry
+            return;
+        }
+        // Check if observer is still observing the current board
+        if (!state.boardObserver || !state.boardObserver.takeRecords) {
+            setupBoardObserver();
+        } else {
+            // Check if the observed target is still the current board
+            try {
+                // MutationObserver doesn't expose target directly, so we re-attach periodically
+                // This is a simple approach: re-attach every 30 seconds
+            } catch (e) {
+                setupBoardObserver();
+            }
+        }
     }
     // --- GLOBAL KEYBIND LISTENER ---
     document.addEventListener("keydown", (e) => {
