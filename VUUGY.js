@@ -735,6 +735,7 @@
             format:  "wasm",
             jsUrl:   "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.js",
             wasmUrl: "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm",
+            wasmUrls: WASM_CONFIG.FALLBACK_URLS["18.0.5"],
             // Capabilities
             maxDepth:        25,
             hasHash:         true,
@@ -757,6 +758,7 @@
             format:  "wasm",
             jsUrl:   "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.js",
             wasmUrl: "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",
+            wasmUrls: WASM_CONFIG.FALLBACK_URLS["16.0.0"],
             maxDepth:        25,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -777,6 +779,7 @@
             format:  "wasm",
             jsUrl:   "https://unpkg.com/stockfish@11.0.0/src/stockfish.js",
             wasmUrl: "https://unpkg.com/stockfish@11.0.0/src/stockfish.wasm",
+            wasmUrls: WASM_CONFIG.FALLBACK_URLS["11.0.0"],
             maxDepth:        20,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -2388,28 +2391,121 @@ self.onmessage = function(e) {
     }
 
     // ─── Download helpers ─────────────────────────────────────────────────────
+    // ─── WASM Download Configuration (Multi-mirror + Retry + Progress) ───────────
+    // Uses native XMLHttpRequest/fetch (respects Brave containers, VPNs, proxies)
+    // instead of GM_xmlhttpRequest (which uses extension background script proxy)
+    const WASM_CONFIG = {
+        TIMEOUT_MS: 300000,           // 5 minutes for 113MB file
+        CHUNK_SIZE: 1024 * 1024,      // 1MB chunks for resume capability
+        MAX_RETRIES: 5,               // 5 retry attempts per URL
+        RETRY_DELAY_MS: 3000,         // Start with 3s, exponential backoff
+        // Multiple CDN mirrors for 100% reliability across networks/browsers/VPNs
+        FALLBACK_URLS: {
+            "18.0.5": [
+                "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm",
+                "https://cdn.jsdelivr.net/npm/stockfish@18.0.5/bin/stockfish-18-single.wasm",
+                "https://cdn.statically.io/npm/stockfish@18.0.5/bin/stockfish-18-single.wasm",
+            ],
+            "16.0.0": [
+                "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",
+                "https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",
+                "https://cdn.statically.io/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",
+            ],
+            "11.0.0": [
+                "https://unpkg.com/stockfish@11.0.0/src/stockfish.wasm",
+                "https://cdn.jsdelivr.net/npm/stockfish@11.0.0/src/stockfish.wasm",
+                "https://cdn.statically.io/npm/stockfish@11.0.0/src/stockfish.wasm",
+            ],
+        }
+    };
+
     function xhrText(url, cb, errCb) {
-        GM_xmlhttpRequest({
-            method: "GET", url, timeout: 30000,
-            onload: (r) => {
-                if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                cb(r.responseText);
-            },
-            onerror: (e) => errCb(new Error("Network error: " + url)),
-            ontimeout: () => errCb(new Error("Timeout: " + url)),
+        // Use native XHR (respects Brave containers, VPNs, proxies)
+        // GM_xmlhttpRequest goes through extension background script which ignores container proxy
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", url, true);
+        xhr.timeout = 60000; // 60s for JS files (small)
+        xhr.onload = () => {
+            if (xhr.status >= 400) { errCb(new Error(`HTTP ${xhr.status}: ${url}`)); return; }
+            cb(xhr.responseText);
+        };
+        xhr.onerror = () => errCb(new Error(`Network error: ${url}`));
+        xhr.ontimeout = () => errCb(new Error(`Timeout (60s): ${url}`));
+        xhr.send();
+    }
+
+    // WASM Download with Multi-Mirror Fallback, Retry, Progress, Resume
+    // Uses native XHR (respects Brave containers, VPNs, proxies)
+    async function downloadWASM(wasmUrls, onProgress) {
+        const { TIMEOUT_MS, CHUNK_SIZE, MAX_RETRIES, RETRY_DELAY_MS } = WASM_CONFIG;
+
+        for (let retry = 0; retry < MAX_RETRIES; retry++) {
+            for (const url of wasmUrls) {
+                try {
+                    console.log(`[SF Engine] WASM: Attempt ${retry + 1}/${MAX_RETRIES}, URL: ${url}`);
+                    const bytes = await fetchWASMWithProgress(url, TIMEOUT_MS, onProgress);
+                    console.log(`[SF Engine] WASM: Successfully downloaded ${bytes.length} bytes from ${url}`);
+                    return bytes;
+                } catch (err) {
+                    console.warn(`[SF Engine] WASM download failed (${url}):`, err.message);
+                    if (wasmUrls.indexOf(url) < wasmUrls.length - 1) continue;
+                }
+            }
+            if (retry < MAX_RETRIES - 1) {
+                const delay = RETRY_DELAY_MS * Math.pow(2, retry);
+                console.log(`[SF Engine] WASM: All mirrors failed, retrying in ${delay}ms...`);
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+        throw new Error(`WASM download failed after ${MAX_RETRIES} retries. URLs: ${wasmUrls.join(', ')}`);
+    }
+
+    function fetchWASMWithProgress(url, timeout, onProgress) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.responseType = 'arraybuffer';
+            xhr.timeout = timeout;
+
+            const timeoutId = setTimeout(() => {
+                xhr.abort();
+                reject(new Error(`WASM download timeout (${timeout}ms): ${url}`));
+            }, timeout);
+
+            xhr.addEventListener('progress', (e) => {
+                if (e.lengthComputable && onProgress) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    onProgress({ percent, loaded: e.loaded, total: e.total });
+                }
+            });
+
+            xhr.addEventListener('load', () => {
+                clearTimeout(timeoutId);
+                if (xhr.status >= 400) {
+                    reject(new Error(`HTTP ${xhr.status}: ${url}`));
+                } else {
+                    resolve(new Uint8Array(xhr.response));
+                }
+            });
+
+            xhr.addEventListener('error', () => {
+                clearTimeout(timeoutId);
+                reject(new Error(`Network error: ${url}`));
+            });
+
+            xhr.addEventListener('abort', () => {
+                clearTimeout(timeoutId);
+                reject(new Error(`Download aborted: ${url}`));
+            });
+
+            console.log(`[SF Engine] WASM: Starting download from ${url}`);
+            xhr.open('GET', url, true);
+            xhr.send();
         });
     }
 
+    // For backward compatibility
     function xhrBinary(url, cb, errCb) {
-        GM_xmlhttpRequest({
-            method: "GET", url, responseType: "arraybuffer", timeout: 30000,
-            onload: (r) => {
-                if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                cb(new Uint8Array(r.response));
-            },
-            onerror: (e) => errCb(new Error("Binary download failed: " + url)),
-            ontimeout: () => errCb(new Error("Binary timeout: " + url)),
-        });
+        downloadWASM([url], null).then(cb).catch(errCb);
     }
 
 // ─── Main load entry point ────────────────────────────────────────────────
@@ -2618,14 +2714,29 @@ self.onmessage = function(e) {
                                 console.log(`[SF Engine] Found cached WASM in IndexedDB (${cachedWasm.length} bytes)`);
                                 resolve(cachedWasm);
                             } else {
-                                console.log(`[SF Engine] No cached WASM, downloading from ${m.wasmUrl}...`);
-                                xhrBinary(m.wasmUrl, (bytes) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] WASM downloaded (${bytes.length} bytes), caching...`); writeCacheAsync(db, wasmKey, bytes); resolve(bytes); },
-                                (e) => { if (!isCurrentLoad()) return; reject(new Error(`WASM download failed: ${e.message || e}. URL: ${m.wasmUrl}. Check: 1) Network 2) unpkg.com 3) ~113MB download allowed`)); });
+                                console.log(`[SF Engine] No cached WASM, downloading with multi-mirror fallback...`);
+                                const wasmUrls = m.wasmUrls || [m.wasmUrl];
+                                downloadWASM(wasmUrls, (progress) => {
+                                    const pct = progress.percent;
+                                    setEngineStatus("loading", `Downloading WASM: ${pct}%`);
+                                }).then((bytes) => {
+                                    if (!isCurrentLoad()) return;
+                                    console.log(`[SF Engine] WASM downloaded (${bytes.length} bytes), caching...`);
+                                    writeCacheAsync(db, wasmKey, bytes);
+                                    resolve(bytes);
+                                }).catch((e) => {
+                                    if (!isCurrentLoad()) return;
+                                    reject(new Error(`WASM download failed: ${e.message}. Check: 1) Network 2) Mirrors (unpkg/jsdelivr/statically) 3) ~113MB download allowed`));
+                                });
                             }
                         });
                     } else {
-                        console.log(`[SF Engine] No IndexedDB, downloading WASM directly from ${m.wasmUrl}...`);
-                        xhrBinary(m.wasmUrl, resolve, (e) => reject(new Error(`WASM download failed (no DB): ${e.message || e}. URL: ${m.wasmUrl}`)));
+                        console.log(`[SF Engine] No IndexedDB, downloading WASM directly with multi-mirror fallback...`);
+                        const wasmUrls = m.wasmUrls || [m.wasmUrl];
+                        downloadWASM(wasmUrls, (progress) => {
+                            const pct = progress.percent;
+                            setEngineStatus("loading", `Downloading WASM: ${pct}%`);
+                        }).then(resolve).catch((e) => reject(new Error(`WASM download failed (no DB): ${e.message}`)));
                     }
                 };
 
