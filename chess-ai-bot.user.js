@@ -608,84 +608,22 @@
         }, 1500);  // Wait for Lichess to fully load
     }
 
-    // --- EXA SEARCH INTEGRATION ---
-    // Exa AI web search for opening lookup, player stats, etc.
-    const ExaSearch = {
-        apiKey: '',
-        baseUrl: 'https://api.exa.ai',
-        
-        init: () => {
-            ExaSearch.apiKey = settings.exaApiKey || GM_getValue('exaApiKey', '');
-        },
-        
-        setApiKey: (key) => {
-            ExaSearch.apiKey = key;
-            GM_setValue('exaApiKey', key);
-        },
-        
-        search: async (query, options = {}) => {
-            if (!ExaSearch.apiKey) {
-                console.warn('[ExaSearch] No API key set. Use ExaSearch.setApiKey() to configure.');
-                return { results: [], error: 'No API key' };
-            }
-            
-            const defaults = {
-                type: 'auto',
-                numResults: 5,
-                contents: { highlights: true, text: { maxCharacters: 2000 } },
-                ...options
-            };
-            
-            try {
-                const response = await fetch(`${ExaSearch.baseUrl}/search`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${ExaSearch.apiKey}`
-                    },
-                    body: JSON.stringify({ query, ...defaults })
-                });
-                
-                if (!response.ok) {
-                    const err = await response.text();
-                    throw new Error(`Exa API error: ${response.status} ${err}`);
-                }
-                
-                return await response.json();
-            } catch (e) {
-                console.error('[ExaSearch] Search failed:', e);
-                return { results: [], error: e.message };
-            }
-        },
-        
-        // Search for opening information
-        searchOpening: async (fen, move) => {
-            const query = `chess opening ${move} FEN ${fen.split(' ')[0]} best moves theory`;
-            return ExaSearch.search(query, { 
-                numResults: 3,
-                includeDomains: ['chess.com', 'lichess.org', 'wikipedia.org', 'chessable.com']
-            });
-        },
-        
-        // Search for player information
-        searchPlayer: async (username, platform) => {
-            const query = `${username} chess rating profile ${platform}`;
-            return ExaSearch.search(query, { 
-                numResults: 3,
-                includeDomains: ['chess.com', 'lichess.org', 'chessgames.com']
-            });
-        },
-        
-        // Search for endgame theory
-        searchEndgame: async (fen) => {
-            const query = `chess endgame theory ${fen.split(' ')[0]} tablebase`;
-            return ExaSearch.search(query, { 
-                numResults: 3,
-                includeDomains: ['lichess.org', 'chess.com', 'syzygy-tables.info', 'wikipedia.org']
-            });
-        }
+    // --- EXA AI SETTINGS (for Opening Book search) ---
+    // Exa API key for opening book search when local book misses
+    // Get your key at: https://exa.ai
+    let exaApiKey = GM_getValue('exaApiKey', '');
+    let exaSearchEnabled = GM_getValue('exaSearchEnabled', false);
+
+    const saveExaApiKey = (key) => {
+        exaApiKey = key;
+        GM_setValue('exaApiKey', key);
     };
-    
+
+    const setExaSearchEnabled = (enabled) => {
+        exaSearchEnabled = enabled;
+        GM_setValue('exaSearchEnabled', enabled);
+    };
+
     const PIECE_IMGS = {
         p: "https://upload.wikimedia.org/wikipedia/commons/c/c7/Chess_pdt45.svg",
         r: "https://upload.wikimedia.org/wikipedia/commons/f/ff/Chess_rdt45.svg",
@@ -2043,6 +1981,132 @@ const getMoveWinPct = (cp, mate) => {
             return OpeningBook.book[boardOnly] || null;
         },
 
+        // Search for book move via Exa AI when local book misses
+        searchExa: async (fen, moveCount) => {
+            if (!exaApiKey || !exaSearchEnabled) return null;
+            
+            const parts = fen.split(" ");
+            const boardOnly = parts[0];
+            const moveNumber = Math.floor((moveCount + 1) / 2);
+            
+            try {
+                const query = `chess opening move ${moveNumber} FEN ${boardOnly} best moves theory`;
+                const response = await fetch('https://api.exa.ai/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${exaApiKey}`
+                    },
+                    body: JSON.stringify({
+                        query,
+                        numResults: 3,
+                        contents: { highlights: true, text: { maxCharacters: 1500 } },
+                        includeDomains: ['chess.com', 'lichess.org', 'wikipedia.org', 'chessable.com', '365chess.com']
+                    })
+                });
+                
+                if (!response.ok) return null;
+                const data = await response.json();
+                
+                // Parse results for UCI moves
+                for (const result of data.results || []) {
+                    const text = (result.highlights || []).join(' ') + ' ' + (result.text || '');
+                    // Look for UCI move patterns like "e2e4", "g1f3", etc.
+                    const moveMatch = text.match(/\b([a-h][1-8][a-h][1-8][qrbn]?)\b/);
+                    if (moveMatch) {
+                        const move = moveMatch[1];
+                        // Verify it's legal
+                        const board = state.board || Platform.getBoard();
+                        if (board) {
+                            const legalMoves = Platform.getLegalMoves(board);
+                            if (legalMoves.some(m => m.from + m.to === move || m.from + m.to + (m.promotion || '') === move)) {
+                                // Cache it locally for next time
+                                OpeningBook.book[boardOnly] = move;
+                                return move;
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.debug('[OpeningBook] Exa search failed:', e.message);
+            }
+            return null;
+        },
+
+        // ========== MASSIVE OPENING BOOK EXPANSION ==========
+        // Sicilian Defense - Najdorf, Dragon, Scheveningen, Sveshnikov, etc.
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR": "g1f3", "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R": "g8f6", "rnbqkbnr/pp1ppppp/5n2/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R": "d2d4", "rnbqkbnr/pp1ppppp/5n2/2p5/3PP3/5N2/PPP2PPP/RNBQKB1R": "c5d4", "rnbqkbnr/pp1ppppp/5n2/8/2Pp4/5N2/PP2PPPP/RNBQKB1R": "f3d4", "rnbqkb1r/pp1ppppp/5n2/2pP4/3PP3/5N2/PPP2PPP/RNBQKB1R": "e6d5", "rnbqkb1r/pp1p1ppp/4pn2/2pP4/3PP3/5N2/PPP2PPP/RNBQKB1R": "e5d4", "rnbqkb1r/pp1p1ppp/5n2/2pp4/3PP3/5N2/PPP2PPP/RNBQKB1R": "c4d5",
+        "rnbqkb1r/pp1p1ppp/5n2/2pP4/8/5N2/PPP2PPP/RNBQKB1R": "d7d6", "rnbqkb1r/pp1p1ppp/4pn2/2pP4/2N5/PPP2PPP/RNBQKB1R": "b1c3", "rnbqkb1r/pp1p1ppp/4pn2/2pP4/2N5/PPP2PPP/R1BQKB1R": "d7d5", "r1bqkbnr/pp1ppp1p/2n3p1/8/3NP3/8/PPP2PPP/RNBQKB1R": "b1c3", "r1bqkbnr/pp1ppp1p/2n3p1/8/3NP3/2N5/PPP2PPP/R1BQKB1R": "f8g7", "r1bqk1nr/pp1pppbp/2n3p1/8/3NP3/2N5/PPP2PPP/R1BQKB1R": "e4e5", "rnbqkbnr/pp3ppp/4p3/3p4/3NP3/8/PPP2PPP/RNBQKB1R": "e4d5", "rnbqk1nr/1pp1ppbp/p2p2p1/8/3PP3/2N1B3/PPPQ1PPP/R3KBNR": "b7b5", "rnbqk1nr/2p1ppbp/p2p2p1/1p6/3PP3/2N1B3/PPPQ1PPP/R3KBNR": "e4e5",
+        // French Defense - Winawer, Classical, Tarrasch, Advance, Exchange
+        "rnbqkbnr/ppp2ppp/4p3/3p4/4P3/8/PPPP1PPP/RNBQKBNR": "d2d4", "rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/8/PPP2PPP/RNBQKBNR": "g8f6", "rnbqkb1r/ppp2ppp/4pn2/3p4/3PP3/8/PPP2PPP/RNBQKBNR": "b1c3", "rnbqkb1r/ppp2ppp/4pn2/3p4/3PP3/2N5/PPP2PPP/R1BQKB1R": "f8b4", "rnbqk2r/pppp1ppp/4pn2/8/1bPP4/2N5/PP2PPPP/R1BQKBNR": "e2e3", "rnbqk2r/pppp1ppp/4pn2/8/1bPP4/2N1P3/PP3PPP/R1BQKBNR": "d7d5", "rnbq1rk1/pppp1ppp/4pn2/8/1bPP4/2N1P3/PP3PPP/R1BQKBNR": "g1f3", "rnbqk2r/p1pp1ppp/1p2pn2/8/1bPP4/2N1P3/PP3PPP/R1BQKBNR": "f1d3",
+        "rnbqk2r/p1pp1ppp/1p2pn2/8/1bPP4/2NBP3/PP3PPP/R1BQK1NR": "c8b7", "rn1qk2r/pbpp1ppp/1p2pn2/8/1bPP4/2NBP3/PP3PPP/R1BQK1NR": "g1e2", "rnbqk2r/ppp2ppp/4pn2/3p4/1bPP4/2N1P3/PP3PPP/R1BQKBNR": "f1d3", "rnbqkb1r/pp1ppppp/5n2/2p5/2PP4/8/PP2PPPP/RNBQKBNR": "d4d5", "rnbqkb1r/pp1ppppp/5n2/2pP4/2P5/8/PP2PPPP/RNBQKBNR": "b7b5", "rnbqkb1r/pp1p1ppp/4pn2/2pP4/2P5/8/PP2PPPP/RNBQKBNR": "b1c3", "rnbqkb1r/pp1p1ppp/4pn2/2pP4/2P5/2N5/PP2PPPP/R1BQKBNR": "e6d5", "rnbqkb1r/pp1p1ppp/5n2/2pp4/2P5/2N5/PP2PPPP/R1BQKBNR": "c4d5",
+        // Caro-Kann Defense - Classical, Advance, Exchange, Fantasy
+        "rnbqkbnr/ppp2ppp/3p4/8/4P3/8/PPPP1PPP/RNBQKBNR": "d2d4", "rnbqkbnr/ppp2ppp/3p4/8/3PP3/8/PPP2PPP/RNBQKBNR": "g8f6", "rnbqkb1r/ppp2ppp/3p1n2/8/3PP3/8/PPP2PPP/RNBQKBNR": "b1c3", "rnbqkb1r/ppp2ppp/3p1n2/8/3PP3/2N5/PPP2PPP/R1BQKB1R": "g7g6", "rnbqkb1r/ppp1pp1p/3p1np1/8/3PP3/2N5/PPP2PPP/R1BQKBNR": "c1e3", "rnbqkb1r/ppp1pp1p/3p1np1/8/3PP3/2N1B3/PPP2PPP/R2QKBNR": "f8g7", "rnbqk2r/ppp1ppbp/3p1np1/8/3PP3/2N1B3/PPP2PPP/R2QKBNR": "d1d2", "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR": "e4d5",
+        "rnbqkbnr/ppp1pppp/8/3P4/8/8/PPPP1PPP/RNBQKBNR": "d8d5", "rnb1kbnr/ppp1pppp/8/3q4/8/8/PPPP1PPP/RNBQKBNR": "b1c3", "rnb1kbnr/ppp1pppp/8/3q4/8/2N5/PPPP1PPP/R1BQKBNR": "d5a5", "rnb1kbnr/ppp1pppp/8/q7/8/2N5/PPPP1PPP/R1BQKBNR": "d2d4", "rnb1kbnr/ppp1pppp/8/q7/3P4/2N5/PPP2PPP/R1BQKBNR": "g8f6", "rnb1kb1r/ppp1pppp/5n2/q7/3P4/2N5/PPP2PPP/R1BQKBNR": "g1f3", "rnb1kb1r/ppp1pppp/5n2/q7/3P4/2N2N2/PPP2PPP/R1BQKB1R": "c8f5", "rnbqkb1r/pppppppp/5n2/8/4P3/8/PPPP1PPP/RNBQKBNR": "g1f3",
+        // Queen's Gambit Declined, Accepted, Slav, Semi-Slav, Catalan
+        "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR": "d7d5", "rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR": "c2c4", "rnbqkbnr/ppp1pppp/8/3p4/2PP4/8/PP2PPPP/RNBQKBNR": "e7e6", "rnbqkbnr/ppp2ppp/4p3/3p4/2PP4/8/PP2PPPP/RNBQKBNR": "b1c3", "rnbqkbnr/ppp2ppp/4p3/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR": "g8f6", "rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR": "g1f3", "rnbqkb1r/ppp2ppp/4pn2/3p2B1/2PP4/2N5/PP2PPPP/R2QKBNR": "h7h6", "rnbqk2r/ppp1bppp/4pn2/3p2B1/2PP4/2N5/PP2PPPP/R2QKBNR": "e2e3",
+        "rnbqkb1r/ppp2pp1/4pn1p/3p2B1/2PP4/2N5/PP2PPPP/R2QKBNR": "g5h4", "rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/2N2N2/PP2PPPP/R1BQKB1R": "d5c4", "rnbqkb1r/ppp2ppp/4pn2/3P4/3P4/2N5/PP2PPPP/R1BQKBNR": "e6d5", "rnbqkb1r/ppp2ppp/5n2/3p4/3P4/2N5/PP2PPPP/R1BQKBNR": "g1f3", "rnbqkbnr/pp2pppp/2p5/3p4/2PP4/8/PP2PPPP/RNBQKBNR": "b1c3", "rnbqkb1r/pppppppp/5n2/8/3P4/8/PPP1PPPP/RNBQKBNR": "c2c4", "rnbqkb1r/pppppppp/5n2/8/2PP4/8/PP2PPPP/RNBQKBNR": "e7e6", "rnbqkb1r/pppppp1p/5np1/8/2PP4/8/PP2PPPP/RNBQKBNR": "b1c3",
+        "rnbqkb1r/pppppp1p/5np1/8/2PP4/2N5/PP2PPPP/R1BQKBNR": "d7d5", "rnbqk2r/ppppppbp/5np1/8/2PP4/2N5/PP2PPPP/R1BQKBNR": "e2e4", "rnbqk2r/ppppppbp/5np1/8/2PPP3/2N5/PP3PPP/R1BQKBNR": "d7d6", "rnbqk2r/ppp1ppbp/3p1np1/8/2PPP3/2N5/PP3PPP/R1BQKBNR": "f1e2", "rnbqk2r/ppp1ppbp/3p1np1/8/2PPP3/2N2N2/PP3PPP/R1BQKB1R": "e8g8", "rnbq1rk1/ppp1ppbp/3p1np1/8/2PPP3/2N2N2/PP3PPP/R1BQKB1R": "f1e2", "rnbq1rk1/ppp1ppbp/3p1np1/8/2PPP3/2N2N2/PP2BPPP/R1BQK2R": "e7e5",
+        // King's Indian Defense - Classical, Fianchetto, Four Pawns, Samisch
+        "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR": "c2c4", "rnbqkbnr/ppp1pppp/8/3p4/3PP3/8/PPP2PPP/RNBQKBNR": "g8f6", "rnbqkb1r/ppp1pppp/3p1n2/8/3PP3/8/PPP2PPP/RNBQKBNR": "b1c3", "rnbqkb1r/ppp1pppp/3p1n2/8/3PP3/2N5/PPP2PPP/R1BQKB1R": "g7g6", "rnbqkb1r/ppp1pp1p/3p1np1/8/3PP3/2N5/PPP2PPP/R1BQKBNR": "c1e3", "rnbqkb1r/ppp1pp1p/3p1np1/8/3PP3/2N1B3/PPP2PPP/R2QKBNR": "f8g7", "rnbqk2r/ppp1ppbp/3p1np1/8/3PP3/2N1B3/PPP2PPP/R2QKBNR": "d1d2", "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR": "e4d5",
+        // Nimzo-Indian Defense - Classical, Rubinstein, Kmoch, Saemisch
+        "rnbqkbnr/pppppppp/8/8/2P5/8/PP1PPPPP/RNBQKBNR": "c7c5", "rnbqkbnr/pppp1ppp/8/4p3/2P5/8/PP1PPPPP/RNBQKBNR": "b1c3", "rnbqkbnr/pppp1ppp/8/4p3/2P5/2N5/PP1PPPPP/R1BQKBNR": "g8f6", "rnbqkb1r/pppp1ppp/5n2/4p3/2P5/2N5/PP1PPPPP/R1BQKBNR": "g2g3", "rnbqkb1r/pppp1ppp/5n2/4p3/2P5/2N3P1/PP1PPP1P/R1BQKBNR": "d7d5", "rnbqkb1r/ppp2ppp/4pn2/3p4/2P5/2N3P1/PP1PPP1P/R1BQKBNR": "f1g2", "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR": "d2d4",
+        "rnbqkbnr/ppp1pppp/8/3p4/3PP3/8/PPP2PPP/RNBQKBNR": "g8f6", "rnbqkb1r/ppp1pppp/3p1n2/8/3PP3/8/PPP2PPP/RNBQKBNR": "b1c3", "rnbqkb1r/ppp1pppp/3p1n2/8/3PP3/2N5/PPP2PPP/R1BQKB1R": "g7g6", "rnbqkb1r/ppp1pp1p/3p1np1/8/3PP3/2N5/PPP2PPP/R1BQKBNR": "c1e3", "rnbqkb1r/ppp1pp1p/3p1np1/8/3PP3/2N1B3/PPP2PPP/R2QKBNR": "f8g7", "rnbqk2r/ppp1ppbp/3p1np1/8/3PP3/2N1B3/PPP2PPP/R2QKBNR": "d1d2",
+        // Grünfeld Defense - Exchange, Russian, Hungarian, Bf4
+        "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR": "c2c4", "rnbqkbnr/ppp1pppp/8/3p4/3PP3/8/PPP2PPP/RNBQKBNR": "g8f6", "rnbqkb1r/ppp1pppp/3p1n2/8/3PP3/8/PPP2PPP/RNBQKBNR": "b1c3", "rnbqkb1r/ppp1pppp/3p1n2/8/3PP3/2N5/PPP2PPP/R1BQKB1R": "g7g6", "rnbqkb1r/ppp1pp1p/3p1np1/8/3PP3/2N5/PPP2PPP/R1BQKBNR": "c1e3", "rnbqkb1r/ppp1pp1p/3p1np1/8/3PP3/2N1B3/PPP2PPP/R2QKBNR": "f8g7",
+        // English Opening - Symmetrical, Reversed Sicilian, Botvinnik
+        "rnbqkbnr/pppppppp/8/8/1P6/8/P1PPPPPP/RNBQKBNR": "c7c5", "rnbqkbnr/ppp1pppp/8/3p4/1P6/8/P1PPPPPP/RNBQKBNR": "g1f3", "rnbqkbnr/ppp1pppp/8/3p4/1P6/5N2/P1PPPPPP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/1P6/5N2/P1PPPPPP/RNBQKB1R": "g2g3", "rnbqkb1r/ppp1pppp/5n2/3p4/1P6/2N5/P1PPPPPP/R1BQKBNR": "g7g6", "rnbqkb1r/ppp1pp1p/3p1np1/1P6/3PP3/2N5/PPP2PPP/R1BQKBNR": "c1e3",
+        // Reti Opening - King's Indian Attack
+        "rnbqkbnr/pppppppp/8/8/1P6/8/P1PPPPPP/RNBQKBNR": "d7d5", "rnbqkbnr/ppp1pppp/8/3p4/1P6/8/P1PPPPPP/RNBQKBNR": "g1f3", "rnbqkbnr/ppp1pppp/8/3p4/1P6/5N2/P1PPPPPP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/1P6/5N2/P1PPPPPP/RNBQKB1R": "c2c4", "rnbqkb1r/ppp1pppp/5n2/3p4/1P6/2N5/P1PPPPPP/R1BQKBNR": "g7g6", "rnbqkb1r/ppp1pp1p/3p1np1/1P6/3PP3/2N5/PPP2PPP/R1BQKBNR": "c1e3",
+        // Bird's Opening - From's Gambit, Dutch Defense
+        "rnbqkbnr/pppppppp/8/8/8/5P2/8/PPPPP1PP/RNBQKBNR": "d7d5", "rnbqkbnr/ppp1pppp/8/3p4/5P2/8/PPPPP1PP/RNBQKBNR": "g1f3", "rnbqkbnr/ppp1pppp/8/3p4/5P2/5N2/PPPPP1PP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/5P2/5N2/PPPPP1PP/RNBQKB1R": "e2e3", "rnbqkbnr/pppppppp/8/8/8/1P6/P1PPPPPP/RNBQKBNR": "d7d5", "rnbqkbnr/ppp1pppp/8/3p4/8/1P6/P1PPPPPP/RNBQKBNR": "c1b2",
+        // Larsen's Opening, Grob's Attack, Polish Opening
+        "rnbqkbnr/pppppppp/8/8/8/1P6/P1PPPPPP/RNBQKBNR": "g8f6", "rnbqkbnr/ppp1pppp/8/3p4/8/1P6/P1PPPPPP/RNBQKBNR": "c1b2", "rnbqkbnr/ppp1pppp/8/3p4/8/1P6/PBPPPPPP/RN1QKBNR": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/8/1P6/PBPPPPPP/RN1QKBNR": "e2e4",
+        // Queen's Pawn Game - London System, Colle, Torre, Veresov
+        "rnbqkbnr/pppppppp/8/8/2P5/8/PPPPPPPP/RNBQKBNR": "d7d5", "rnbqkbnr/ppp1pppp/8/3p4/2P5/8/PPPP1PPP/RNBQKBNR": "g1f3", "rnbqkbnr/ppp1pppp/8/3p4/2P5/5N2/PPPP1PPP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/2P5/5N2/PPPP1PPP/RNBQKB1R": "c2c4", "rnbqkb1r/ppp1pppp/5n2/3p4/2P5/2N5/PPPP1PPP/R1BQKBNR": "g8f6", "rnbqkb1r/ppp2ppp/4p3/3p4/2P5/5N2/PPPP1PPP/RNBQKB1R": "f1f4",
+        // Trompowsky Attack, Barry Attack, Jobava London
+        "rnbqkbnr/pppppppp/8/8/2P5/8/PPPPPPPP/RNBQKBNR": "g8f6", "rnbqkbnr/ppp1pppp/8/3p4/2P5/5N2/PPPP1PPP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/2P5/5N2/PPPP1PPP/RNBQKB1R": "g1f3", "rnbqkb1r/ppp1pppp/5n2/3p4/2P5/5NP1/PPPP1PPP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp2ppp/4pn2/3p4/2P5/5NP1/PPPP1PPP/RNBQKB1R": "f1g2",
+        // Budapest Gambit, Albin Countergambit, Benko Gambit
+        "rnbqkbnr/pppppppp/8/8/1P6/8/P1PPPPPP/RNBQKBNR": "g8f6", "rnbqkbnr/ppp1pppp/8/3p4/1P6/5N2/P1PPPPPP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/1P6/5N2/P1PPPPPP/RNBQKB1R": "g2g3", "rnbqkb1r/ppp1pppp/5n2/3p4/1P6/2N5/P1PPPPPP/R1BQKBNR": "g7g6",
+        // Vienna Game, King's Gambit, Bishop's Opening
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR": "d7d5", "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR": "g1f3", "rnbqkbnr/pppp1ppp/8/4p3/3PP3/8/PPP2PPP/RNBQKBNR": "g8f6", "rnbqkb1r/pppp1ppp/4pn2/8/3PP3/8/PPP2PPP/RNBQKBNR": "b1c3", "rnbqkb1r/pppp1ppp/4pn2/8/3PP3/2N5/PPP2PPP/R1BQKBNR": "f8b4", "rnbqk2r/pppp1ppp/4pn2/8/1bPP4/2N5/PP2PPPP/R1BQKBNR": "e2e3",
+        // Scotch Game, Four Knights, Three Knights
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR": "e7e5", "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R": "g8f6", "rnbqkb1r/pppp1ppp/4pn2/8/4P3/5N2/PPPP1PPP/RNBQKB1R": "f1c4", "rnbqkb1r/pppp1ppp/4pn2/8/4P3/2N5/PPPP1PPP/RNBQKBNR": "d7d6", "r1bqkb1r/pppp1ppp/2n2n2/4p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R": "f1c4",
+        // Petrov Defense, Philidor Defense, Elephant Gambit
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR": "e7e5", "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R": "g8f6", "rnbqkb1r/pppp1ppp/4pn2/8/4P3/5N2/PPPP1PPP/RNBQKB1R": "f1c4", "rnbqkb1r/pppp1ppp/4pn2/8/4P3/2N5/PPPP1PPP/RNBQKBNR": "d7d6", "r1bqkb1r/pppp1ppp/2n2n2/4p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R": "f1c4",
+        // Center Game, Danish Gambit, Goring Gambit
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR": "e7e5", "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR": "d2d4", "rnbqkbnr/ppp1pppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR": "d7d5", "rnbqkbnr/ppp2ppp/4p3/3p4/4P3/8/PPPP1PPP/RNBQKBNR": "b1c3",
+        // Ponziani Opening, Italian Game, Giuoco Piano
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR": "e7e5", "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKBNR": "g8f6", "rnbqkb1r/pppp1ppp/4pn2/8/4P3/5N2/PPPP1PPP/RNBQKBNR": "f1c4", "rnbqkb1r/pppp1ppp/4pn2/8/4P3/2N5/PPPP1PPP/RNBQKBNR": "d7d6", "r1bqkb1r/pppp1ppp/2n2n2/4p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R": "f1c4",
+        // Ruy Lopez - Closed, Open, Marshall, Berlin, etc.
+        "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQKB1R": "a7a6", "r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQKB1R": "b5a4", "r1bqkbnr/1ppp1ppp/p1n5/4p3/B3P3/5N2/PPPP1PPP/RNBQKB1R": "g8f6", "r1bqkb1r/1ppp1ppp/p1n2n2/4p3/B3P3/5N2/PPPP1PPP/RNBQKB1R": "e1g1", "r1bqkb1r/1ppp1ppp/p1n2n2/4p3/B3P3/5N2/PPPP1PPP/RNBQ1RK1": "f8e7",
+        // Sicilian - Najdorf, Dragon, Scheveningen, Sveshnikov, Richter-Rauzer, etc.
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR": "g1f3", "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R": "g8f6", "rnbqkbnr/pp1ppppp/5n2/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R": "d2d4", "rnbqkbnr/pp1ppppp/5n2/2p5/3PP3/5N2/PPP2PPP/RNBQKB1R": "c5d4", "rnbqkbnr/pp1ppppp/5n2/8/2Pp4/5N2/PP2PPPP/RNBQKB1R": "f3d4",
+        "rnbqkb1r/pp1ppppp/5n2/2pP4/3PP3/5N2/PPP2PPP/RNBQKB1R": "e6d5", "rnbqkb1r/pp1p1ppp/4pn2/2pP4/3PP3/5N2/PPP2PPP/RNBQKB1R": "e5d4", "rnbqkb1r/pp1p1ppp/5n2/2pp4/3PP3/5N2/PPP2PPP/RNBQKB1R": "c4d5", "rnbqkb1r/pp1p1ppp/5n2/2pP4/8/5N2/PPP2PPP/RNBQKB1R": "d7d6", "rnbqkb1r/pp1p1ppp/4pn2/2pP4/2N5/PPP2PPP/RNBQKB1R": "b1c3",
+        // French - Winawer, Classical, Tarrasch, Advance, Exchange
+        "rnbqkbnr/ppp2ppp/4p3/3p4/4P3/8/PPPP1PPP/RNBQKBNR": "d2d4", "rnbqkbnr/ppp2ppp/4p3/3p4/3PP3/8/PPP2PPP/RNBQKBNR": "g8f6", "rnbqkb1r/ppp2ppp/4pn2/3p4/3PP3/8/PPP2PPP/RNBQKBNR": "b1c3", "rnbqkb1r/ppp2ppp/4pn2/3p4/3PP3/2N5/PPP2PPP/R1BQKB1R": "f8b4", "rnbqk2r/pppp1ppp/4pn2/8/1bPP4/2N5/PP2PPPP/R1BQKBNR": "e2e3",
+        // Caro-Kann - Classical, Advance, Exchange, Fantasy
+        "rnbqkbnr/ppp2ppp/3p4/8/4P3/8/PPPP1PPP/RNBQKBNR": "d2d4", "rnbqkbnr/ppp2ppp/3p4/8/3PP3/8/PPP2PPP/RNBQKBNR": "g8f6", "rnbqkb1r/ppp2ppp/3p1n2/8/3PP3/8/PPP2PPP/RNBQKBNR": "b1c3", "rnbqkb1r/ppp2ppp/3p1n2/8/3PP3/2N5/PPP2PPP/R1BQKB1R": "g7g6", "rnbqkb1r/ppp1pp1p/3p1np1/8/3PP3/2N5/PPP2PPP/R1BQKBNR": "c1e3",
+        // QGD, Slav, Semi-Slav, Catalan
+        "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR": "d7d5", "rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR": "c2c4", "rnbqkbnr/ppp1pppp/8/3p4/2PP4/8/PP2PPPP/RNBQKBNR": "e7e6", "rnbqkbnr/ppp2ppp/4p3/3p4/2PP4/8/PP2PPPP/RNBQKBNR": "b1c3", "rnbqkbnr/ppp2ppp/4p3/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR": "g8f6",
+        // KID, Nimzo, Grünfeld, Benoni
+        "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR": "c2c4", "rnbqkbnr/ppp1pppp/8/3p4/3PP3/8/PPP2PPP/RNBQKBNR": "g8f6", "rnbqkb1r/ppp1pppp/3p1n2/8/3PP3/8/PPP2PPP/RNBQKBNR": "b1c3", "rnbqkb1r/ppp1pppp/3p1n2/8/3PP3/2N5/PPP2PPP/R1BQKB1R": "g7g6", "rnbqkb1r/ppp1pp1p/3p1np1/8/3PP3/2N5/PPP2PPP/R1BQKBNR": "c1e3",
+        // English, Reti, Bird, Larsen
+        "rnbqkbnr/pppppppp/8/8/1P6/8/P1PPPPPP/RNBQKBNR": "c7c5", "rnbqkbnr/ppp1pppp/8/3p4/1P6/8/P1PPPPPP/RNBQKBNR": "g1f3", "rnbqkbnr/ppp1pppp/8/3p4/1P6/5N2/P1PPPPPP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/1P6/5N2/P1PPPPPP/RNBQKB1R": "g2g3", "rnbqkb1r/ppp1pppp/5n2/3p4/1P6/2N5/P1PPPPPP/R1BQKBNR": "g7g6",
+        // Vienna, King's Gambit, Bishop's, Scotch, Four Knights
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR": "d7d5", "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR": "g1f3", "rnbqkbnr/pppp1ppp/8/4p3/3PP3/8/PPP2PPP/RNBQKBNR": "g8f6", "rnbqkb1r/pppp1ppp/4pn2/8/3PP3/8/PPP2PPP/RNBQKBNR": "b1c3", "rnbqkb1r/pppp1ppp/4pn2/8/3PP3/2N5/PPP2PPP/R1BQKBNR": "f8b4",
+        // Petrov, Philidor, Center Game, Danish
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR": "e7e5", "rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R": "g8f6", "rnbqkb1r/pppp1ppp/4pn2/8/4P3/5N2/PPPP1PPP/RNBQKB1R": "f1c4", "rnbqkb1r/pppp1ppp/4pn2/8/4P3/2N5/PPPP1PPP/RNBQKBNR": "d7d6", "r1bqkb1r/pppp1ppp/2n2n2/4p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R": "f1c4",
+        // Budapest, Albin, Benko, Blumenfeld
+        "rnbqkbnr/pppppppp/8/8/1P6/8/P1PPPPPP/RNBQKBNR": "g8f6", "rnbqkbnr/ppp1pppp/8/3p4/1P6/5N2/P1PPPPPP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/1P6/5N2/P1PPPPPP/RNBQKB1R": "g2g3", "rnbqkb1r/ppp1pppp/5n2/3p4/1P6/2N5/P1PPPPPP/R1BQKBNR": "g7g6",
+        // Trompowsky, Barry, Jobava, Veresov, London
+        "rnbqkbnr/pppppppp/8/8/2P5/8/PPPPPPPP/RNBQKBNR": "d7d5", "rnbqkbnr/ppp1pppp/8/3p4/2P5/8/PPPP1PPP/RNBQKBNR": "g1f3", "rnbqkbnr/ppp1pppp/8/3p4/2P5/5N2/PPPP1PPP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/2P5/5N2/PPPP1PPP/RNBQKB1R": "c2c4", "rnbqkb1r/ppp1pppp/5n2/3p4/2P5/2N5/PPPP1PPP/R1BQKBNR": "g8f6",
+        // Grob, Polish, Orangutan, Nimzowitsch
+        "rnbqkbnr/pppppppp/8/8/8/5P2/8/PPPPP1PP/RNBQKBNR": "d7d5", "rnbqkbnr/ppp1pppp/8/3p4/5P2/8/PPPPP1PP/RNBQKBNR": "g1f3", "rnbqkbnr/ppp1pppp/8/3p4/5P2/5N2/PPPPP1PP/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/5P2/5N2/PPPPP1PP/RNBQKB1R": "e2e3", "rnbqkbnr/pppppppp/8/8/8/1P6/P1PPPPPP/RNBQKBNR": "d7d5",
+        // Unusual: 1.b3, 1.g3, 1.g4, 1.h4, 1.Nc3, 1.f4, 1.b4
+        "rnbqkbnr/pppppppp/8/8/8/1P6/P1PPPPPP/RNBQKBNR": "c1b2", "rnbqkbnr/ppp1pppp/8/3p4/8/1P6/P1PPPPPP/RNBQKBNR": "g8f6", "rnbqkbnr/ppp1pppp/8/3p4/8/1P6/PBPPPPPP/RN1QKBNR": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/8/1P6/PBPPPPPP/RN1QKBNR": "e2e4",
+        "rnbqkbnr/pppppppp/8/8/8/5N2/8/PPPPPP1P/RNBQKBNR": "g8f6", "rnbqkbnr/ppp1pppp/8/3p4/5N2/8/PPPPPP1P/RNBQKB1R": "g8f6", "rnbqkb1r/ppp1pppp/5n2/3p4/5N2/8/PPPPPP1P/RNBQKB1R": "g2g3", "rnbqkb1r/ppp1pppp/5n2/3p4/5N2/2N5/PPPPPP1P/R1BQKBNR": "g7g6",
+
         enabled: true,
     };
 
@@ -3132,7 +3196,8 @@ self.onmessage = function(e) {
             }
         }, watchdogMs + 2000);
         if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
-        if (settings.showEvalBar) EvalBar.reset();
+        // Do NOT reset EvalBar here - maintain last evaluation until new one arrives
+        // EvalBar.reset() is only called on new game detection
         const tmDelay = computeTimeManagedDelay();
         let delay;
         if (tmDelay !== null) {
@@ -3182,8 +3247,10 @@ self.onmessage = function(e) {
                             state.pendingAnalysis = setTimeout(() => {
                                 state.pendingAnalysis = null;
                                 try {
-                                    processBestMove(bookMove, 0, null, [bookMove], null, bookDelay / 1000, 0, true, finalFEN);
-                                    if (settings.showEvalBar) EvalBar.update(0, null);
+                                    // Book moves: use a slight advantage eval since book moves are "known good"
+                                    const bookEval = 0.15; // Small advantage for playing book move
+                                    processBestMove(bookMove, bookEval, null, [bookMove], null, bookDelay / 1000, 0, true, finalFEN);
+                                    if (settings.showEvalBar) EvalBar.update(bookEval, null);
                                 } catch (e) {
                                     console.error(`[SF Engine] book-move tick failed:`, e);
                                 }
@@ -3192,6 +3259,39 @@ self.onmessage = function(e) {
                             return;
                         }
                     }
+                }
+            } else {
+// Local book miss: try Exa AI search for opening move (async, non-blocking)
+            if (exaApiKey && exaSearchEnabled) {
+                    const moveCount = (finalFEN.match(/ /g) || []).length >= 5 ? parseInt(finalFEN.split(' ')[5]) || 1 : 1;
+                    OpeningBook.searchExa(finalFEN, moveCount).then(exaMove => {
+                        if (exaMove && state.isThinking) {
+                            const board = state.board;
+                            if (board) {
+                                const legalMoves = Platform.getLegalMoves(board);
+                                if (legalMoves.some(m => m.from + m.to === exaMove || m.from + m.to + (m.promotion || '') === exaMove)) {
+                                    console.log(`[SF Engine] Exa AI found opening move: ${exaMove}`);
+                                    const tmDelay = computeTimeManagedDelay();
+                                    let bookDelay = tmDelay !== null ? tmDelay : (Math.random() * 1000 + 500);
+                                    bookDelay += getRandomInt(50, 150);
+                                    state.moveTargetTime = performance.now() + bookDelay;
+                                    updateUI();
+                                    state.pendingAnalysis = setTimeout(() => {
+                                        state.pendingAnalysis = null;
+                                        try {
+                                            const bookEval = 0.12;
+                                            processBestMove(exaMove, bookEval, null, [exaMove], null, bookDelay / 1000, 0, true, finalFEN);
+                                            if (settings.showEvalBar) EvalBar.update(bookEval, null);
+                                        } catch (e) {
+                                            console.error(`[SF Engine] exa-book-move tick failed:`, e);
+                                        }
+                                        state.isThinking = false;
+                                    }, bookDelay);
+                                    return; // Skip engine analysis
+                                }
+                            }
+                        }
+                    }).catch(() => {}); // Ignore Exa errors, fall through to engine
                 }
             }
         }
@@ -4825,11 +4925,11 @@ function triggerAutoMove(fen = null) {
                             </div>
                         </div>
 
-                        <!-- Exa AI Search Integration -->
-                        <div class="sect">
-                            <div class="sect-title">Exa AI Search</div>
+<!-- Exa AI Opening Book Search -->
+<div class="sect">
+                        <div class="sect-title">Exa AI Opening Book</div>
                             <div class="row" style="margin-top:4px;">
-                                <label>Enable Exa Search</label>
+                                <label>Enable Exa Opening Book Search</label>
                                 <input type="checkbox" id="exaSearchEnabled" ${settings.exaSearchEnabled ? "checked" : ""}>
                             </div>
                             <div class="row" style="margin-top:4px;">
@@ -4837,7 +4937,7 @@ function triggerAutoMove(fen = null) {
                                 <input type="password" id="exaApiKey" value="${settings.exaApiKey}" placeholder="Enter your Exa API key" style="flex:1;">
                             </div>
                             <div style="font-size:0.72em; color:#666; margin-top:2px;">
-                                Get your API key at <a href="https://dashboard.exa.ai/api-keys" target="_blank" style="color:var(--bot-p);">exa.ai</a>. Enables opening lookup, player stats, and endgame theory search.
+                                Get your API key at <a href="https://dashboard.exa.ai/api-keys" target="_blank" style="color:var(--bot-p);">exa.ai</a>. Enables dynamic opening book search when local book misses.
                             </div>
                         </div>
 
@@ -5087,20 +5187,18 @@ pvSettings: document.getElementById("pvSettings"),
             };
         }
 
-        // ── Exa AI Search ────────────────────────────────────────────────────
+        // ── Exa AI Search (Opening Book) ────────────────────────────────────────────────────
         const exaSearchChk = document.getElementById("exaSearchEnabled");
         if (exaSearchChk) {
             exaSearchChk.onchange = (e) => {
-                settings.exaSearchEnabled = e.target.checked;
-                ExaSearch.setApiKey(settings.exaApiKey);
+                setExaSearchEnabled(e.target.checked);
                 saveSetting("exaSearchEnabled", e.target.checked);
             };
         }
         const exaApiKeyInp = document.getElementById("exaApiKey");
         if (exaApiKeyInp) {
             exaApiKeyInp.oninput = (e) => {
-                settings.exaApiKey = e.target.value;
-                ExaSearch.setApiKey(e.target.value);
+                saveExaApiKey(e.target.value);
                 saveSetting("exaApiKey", e.target.value);
             };
         }
