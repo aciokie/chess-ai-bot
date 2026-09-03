@@ -709,7 +709,6 @@
     // instead of GM_xmlhttpRequest (which uses extension background script proxy)
     const WASM_CONFIG = {
         TIMEOUT_MS: 300000,           // 5 minutes for 113MB file
-        CHUNK_SIZE: 1024 * 1024,      // 1MB chunks for resume capability
         MAX_RETRIES: 5,               // 5 retry attempts per URL
         RETRY_DELAY_MS: 3000,         // Start with 3s, exponential backoff
         // Multiple CDN mirrors for 100% reliability across networks/browsers/VPNs
@@ -2445,7 +2444,7 @@ self.onmessage = function(e) {
     // WASM Download with Multi-Mirror Fallback, Retry, Progress, Resume
     // Uses native XHR (respects Brave containers, VPNs, proxies)
     async function downloadWASM(wasmUrls, onProgress) {
-        const { TIMEOUT_MS, CHUNK_SIZE, MAX_RETRIES, RETRY_DELAY_MS } = WASM_CONFIG;
+        const { TIMEOUT_MS, MAX_RETRIES, RETRY_DELAY_MS } = WASM_CONFIG;
 
         for (let retry = 0; retry < MAX_RETRIES; retry++) {
             for (const url of wasmUrls) {
@@ -2724,9 +2723,14 @@ self.onmessage = function(e) {
                             } else {
                                 console.log(`[SF Engine] No cached WASM, downloading with multi-mirror fallback...`);
                                 const wasmUrls = m.wasmUrls || [m.wasmUrl];
+                                let lastProgressUpdate = 0;
                                 downloadWASM(wasmUrls, (progress) => {
-                                    const pct = progress.percent;
-                                    setEngineStatus("loading", `Downloading WASM: ${pct}%`);
+                                    const now = Date.now();
+                                    if (now - lastProgressUpdate > 200) { // Throttle UI updates to 5fps
+                                        lastProgressUpdate = now;
+                                        const pct = progress.percent;
+                                        setEngineStatus("loading", `Downloading WASM: ${pct}%`);
+                                    }
                                 }).then((bytes) => {
                                     if (!isCurrentLoad()) return;
                                     console.log(`[SF Engine] WASM downloaded (${bytes.length} bytes), caching...`);
@@ -2741,9 +2745,14 @@ self.onmessage = function(e) {
                     } else {
                         console.log(`[SF Engine] No IndexedDB, downloading WASM directly with multi-mirror fallback...`);
                         const wasmUrls = m.wasmUrls || [m.wasmUrl];
+                        let lastProgressUpdate = 0;
                         downloadWASM(wasmUrls, (progress) => {
-                            const pct = progress.percent;
-                            setEngineStatus("loading", `Downloading WASM: ${pct}%`);
+                            const now = Date.now();
+                            if (now - lastProgressUpdate > 200) {
+                                lastProgressUpdate = now;
+                                const pct = progress.percent;
+                                setEngineStatus("loading", `Downloading WASM: ${pct}%`);
+                            }
                         }).then(resolve).catch((e) => reject(new Error(`WASM download failed (no DB): ${e.message}`)));
                     }
                 };
