@@ -1,0 +1,83 @@
+- generic [active] [ref=e1]:
+  - button "Accessibility - Enable blind mode" [ref=e3] [cursor=pointer]
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - link "" [ref=e6] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=e8]:
+        - link "Play" [ref=e10] [cursor=pointer]:
+          - /url: /
+        - link "Puzzles" [ref=e12] [cursor=pointer]:
+          - /url: /training
+        - link "Learn" [ref=e14] [cursor=pointer]:
+          - /url: /learn
+        - link "Watch" [ref=e16] [cursor=pointer]:
+          - /url: /broadcast
+        - link "Community" [ref=e18] [cursor=pointer]:
+          - /url: /player
+        - link "Tools" [ref=e20] [cursor=pointer]:
+          - /url: /analysis
+      - link " Donate" [ref=e21] [cursor=pointer]:
+        - /url: /patron
+    - generic [ref=e22]:
+      - text: 
+      - generic [ref=e23]:
+        - generic [ref=e24] [cursor=pointer]: 
+        - textbox "Search"
+      - generic [ref=e25]:
+        - link "Sign in" [ref=e26] [cursor=pointer]:
+          - /url: /login?referrer=/analysis/standard
+        - link "Register" [ref=e27] [cursor=pointer]:
+          - /url: /signup
+      - button "Preferences" [ref=e29] [cursor=pointer]: 
+  - main [ref=e31]:
+    - generic [ref=e35]:
+      - generic [ref=e36] [cursor=pointer]
+      - generic:
+        - generic: "1"
+        - generic: "2"
+        - generic: "3"
+        - generic: "4"
+        - generic: "5"
+        - generic: "6"
+        - generic: "7"
+        - generic: "8"
+      - generic:
+        - generic: a
+        - generic: b
+        - generic: c
+        - generic: d
+        - generic: e
+        - generic: f
+        - generic: g
+        - generic: h
+    - generic [ref=e39]:
+      - button "" [ref=e40]:
+        - checkbox "" [ref=e41]
+      - generic [ref=e44]: SF 18 dev 85MBNNUEin local browser
+      - button "" [ref=e45] [cursor=pointer]
+    - generic [ref=e47]:
+      - generic [ref=e48]:
+        - button "" [disabled] [ref=e49]
+        - button "" [disabled] [ref=e50]
+        - button "" [disabled] [ref=e51]
+        - button "" [disabled] [ref=e52]
+      - button "" [ref=e53] [cursor=pointer]
+      - button "" [ref=e54] [cursor=pointer]
+      - button "" [ref=e55] [cursor=pointer]
+    - generic [ref=e57]:
+      - generic [ref=e58]:
+        - generic [ref=e59]: FEN
+        - textbox [ref=e60]: rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+      - generic [ref=e62]:
+        - generic [ref=e63]: PGN
+        - textbox [ref=e64]
+    - complementary [ref=e65]:
+      - generic [ref=e66]:
+        - checkbox [ref=e67]
+        - menu [ref=e68] [cursor=pointer]:
+          - generic [ref=e69]:  Standard
+          - text: 
+        - navigation
+    - text: 
+  - generic [ref=e70] [cursor=pointer]: 
