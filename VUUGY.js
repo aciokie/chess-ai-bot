@@ -1319,16 +1319,125 @@ const getMoveWinPct = (cp, mate) => {
         return Math.random() * 100 > settings.humanizeRate;
     };
 
-    // --- BOARD FEN LOGIC ---
-    function getRawBoardFEN() {
-        return ErrorReporter.wrap('getRawBoardFEN', () => {
-            if (!state.board) return null;
+    // ─── OPTIMIZED BOARD STATE MANAGER ──────────────────────────────────────────
+    // Centralized board access with caching to avoid repeated DOM queries
+    const BoardManager = {
+        _board: null,
+        _boardCache: null,
+        _boardCacheTime: 0,
+        _cacheTTL: 500, // ms
+
+        // Get board element with caching
+        get() {
+            const now = Date.now();
+            if (this._boardCache && (now - this._boardCacheTime) < this._cacheTTL) {
+                return this._boardCache;
+            }
+            this._boardCache = document.querySelector(Platform.getBoardSelectors());
+            this._boardCacheTime = now;
+            return this._boardCache;
+        },
+
+        // Invalidate cache when board might have changed
+        invalidate() {
+            this._boardCache = null;
+            this._boardCacheTime = 0;
+        },
+
+        // Get FEN with error handling
+        getFEN() {
+            const board = this.get();
+            if (!board) return null;
             try {
-                return Platform.getFEN(state.board);
-            } catch (e) {}
-            return null;
-        })();
-    }
+                return Platform.getFEN(board);
+            } catch (e) {
+                console.debug('[SF Engine] getFEN error:', e);
+                return null;
+            }
+        },
+
+        // Get turn (1=white, 2=black)
+        getTurn() {
+            const board = this.get();
+            if (!board) return null;
+            try {
+                return Platform.getTurn(board);
+            } catch (e) {
+                return null;
+            }
+        },
+
+        // Get playing as (1=white, 2=black)
+        getPlayingAs() {
+            const board = this.get();
+            if (!board) return null;
+            try {
+                return Platform.getPlayingAs(board);
+            } catch (e) {
+                return null;
+            }
+        },
+
+        // Check if it's our turn
+        isOurTurn() {
+            const turn = this.getTurn();
+            const playingAs = this.getPlayingAs();
+            if (turn === null || playingAs === null) return false;
+            return (turn === 1 || turn === 'w' || turn === 'white') === (playingAs === 1 || playingAs === 'w' || playingAs === 'white');
+        },
+
+        // Get legal moves
+        getLegalMoves() {
+            const board = this.get();
+            if (!board) return [];
+            try {
+                return Platform.getLegalMoves(board) || [];
+            } catch (e) {
+                return [];
+            }
+        },
+
+        // Make move
+        makeMove(move, promotion = 'q') {
+            const board = this.get();
+            if (!board) return false;
+            try {
+                return Platform.makeMove(board, move, promotion);
+            } catch (e) {
+                console.error('[SF Engine] makeMove error:', e);
+                return false;
+            }
+        },
+
+        // Check if board is flipped
+        isFlipped() {
+            const board = this.get();
+            if (!board) return false;
+            try {
+                return Platform.isFlipped(board);
+            } catch (e) {
+                return false;
+            }
+        },
+
+        // Initialize Lichess color detection
+        initLichessColor() {
+            if (Platform.isLichess()) {
+                lichessState.initPlayerColor();
+            }
+        }
+    };
+
+    // Initialize state.board reference from BoardManager
+    Object.defineProperty(state, 'board', {
+        get() { return BoardManager.get(); },
+        set(v) { BoardManager._board = v; },
+        configurable: true
+    });
+
+    // --- FEN UTILITIES ---
+    const START_FEN_PIECES = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+
     function sanitizeFEN(rawFEN) {
         if (!rawFEN) return "";
         let parts = rawFEN.replace(/\s+/g, " ").trim().split(" ");
@@ -1338,6 +1447,11 @@ const getMoveWinPct = (cp, mate) => {
         }
         if (parts[3] && parts[3] !== "-") parts[3] = parts[3].toLowerCase();
         return parts.join(" ");
+    }
+
+    function getCleanFEN() {
+        const raw = BoardManager.getFEN();
+        return raw ? sanitizeFEN(raw) : "";
     }
     function fenPieceAt(pieces, square) {
         const file = square.charCodeAt(0) - 97, rank = parseInt(square.charAt(1));
@@ -1357,8 +1471,12 @@ const getMoveWinPct = (cp, mate) => {
         }
         return null;
     }
-    // --- VISUAL MANAGER ---
+    // --- VISUAL MANAGER (Optimized with requestAnimationFrame) ---
     const Visuals = {
+        _rafId: null,
+        _pendingDraws: new Set(),
+        _redrawScheduled: false,
+
         add: (move, type) => {
             if (!move) return;
             if (!settings.showMoveHighlights) return;
@@ -1374,15 +1492,12 @@ const getMoveWinPct = (cp, mate) => {
 
             // NATIVE ARROW HANDLING
             if (settings.visualType === "nativeArrow") {
-                state.board = Platform.getBoard();
-                if (state.board?.game?.markings) {
-                    state.board.game.markings.addOne({
+                const board = BoardManager.get();
+                if (board?.game?.markings) {
+                    board.game.markings.addOne({
                         type: "arrow",
                         tags: ["Arrows", id],
-                        data: {
-                            from: move.substring(0, 2),
-                            to: move.substring(2, 4)
-                        }
+                        data: { from: move.substring(0, 2), to: move.substring(2, 4) }
                     });
                     state.visuals.push({ id, move, type, interval: null, isFading: false });
                     return;
@@ -1392,15 +1507,18 @@ const getMoveWinPct = (cp, mate) => {
             Visuals.draw(id, move);
             if (type === 'history' && settings.visualDuration === -1) {
                 const vis = state.visuals.find(v => v.id === id);
-                if (vis) { const vr = ShadowKit.boardRoot(state.board); if (vr) vr.querySelectorAll(`.${id}`).forEach(el => el.remove()); state.visuals = state.visuals.filter(v => v.id !== id); }
+                if (vis) { const vr = ShadowKit.boardRoot(BoardManager.get()); if (vr) vr.querySelectorAll(`.${id}`).forEach(el => el.remove()); state.visuals = state.visuals.filter(v => v.id !== id); }
                 return;
             }
-            const interval = setInterval(() => {
-                const vis = state.visuals.find(v => v.id === id);
-                if (!vis || vis.isFading) { clearInterval(interval); return; }
+            // Use requestAnimationFrame instead of 50ms interval for smoother, more efficient redraws
+            const vis = { id, move, type, isFading: false, _frame: null };
+            vis._frame = requestAnimationFrame(function redraw() {
+                const v = state.visuals.find(v => v.id === id);
+                if (!v || v.isFading) return;
                 Visuals.draw(id, move);
-            }, 50);
-            state.visuals.push({ id, move, type, interval, isFading: false });
+                v._frame = requestAnimationFrame(redraw);
+            });
+            state.visuals.push(vis);
             if (type === 'history') {
                 if (settings.visualDuration > 0) {
                     const ms = settings.visualDuration * 1000;
@@ -1410,16 +1528,16 @@ const getMoveWinPct = (cp, mate) => {
             }
         },
         draw: (id, move) => {
-            state.board = Platform.getBoard();
-            if (!state.board) return;
-            const root = ShadowKit.boardRoot(state.board);
+            const board = BoardManager.get();
+            if (!board) return;
+            const root = ShadowKit.boardRoot(board);
             if (root.querySelector(`.${id}`)) return;
             const { r, g, b } = hexToRgb(settings.highlightColor);
             const col = (a) => `rgba(${r}, ${g}, ${b}, ${a})`;
             const from = move.substring(0, 2);
             const to = move.substring(2, 4);
             const drawBox = () => {
-                let isFlipped = Platform.isFlipped(state.board);
+                let isFlipped = BoardManager.isFlipped();
                 [from, to].forEach((alg) => {
                     const file = alg.charCodeAt(0) - 97, rank = parseInt(alg.charAt(1)) - 1;
                     const left = isFlipped ? (7 - file) * 12.5 : file * 12.5;
@@ -1445,8 +1563,8 @@ const getMoveWinPct = (cp, mate) => {
             const vis = state.visuals.find(v => v.id === id);
             if (!vis) return;
             vis.isFading = true;
-            clearInterval(vis.interval);
-            const fr = ShadowKit.boardRoot(state.board || Platform.getBoard());
+            if (vis._frame) cancelAnimationFrame(vis._frame);
+            const fr = ShadowKit.boardRoot(BoardManager.get());
             const els = fr ? fr.querySelectorAll(`.${id}`) : [];
             els.forEach(el => {
                 el.style.setProperty("transition", `opacity ${settings.visualDuration}s linear`, "important");
@@ -1456,12 +1574,16 @@ const getMoveWinPct = (cp, mate) => {
         },
         remove: (id) => {
             const idx = state.visuals.findIndex(v => v.id === id);
-            if (idx !== -1) { clearInterval(state.visuals[idx].interval); state.visuals.splice(idx, 1); }
-            const rr = ShadowKit.boardRoot(state.board || Platform.getBoard());
+            if (idx !== -1) {
+                const vis = state.visuals[idx];
+                if (vis._frame) cancelAnimationFrame(vis._frame);
+                state.visuals.splice(idx, 1);
+            }
+            const rr = ShadowKit.boardRoot(BoardManager.get());
             if (rr) rr.querySelectorAll(`.${id}`).forEach(el => el.remove());
 
             if (settings.visualType === "nativeArrow") {
-                const board = Platform.getBoard();
+                const board = BoardManager.get();
                 if (board?.game?.markings) {
                     board.game.markings.removeAll();
                 }
@@ -1472,7 +1594,7 @@ const getMoveWinPct = (cp, mate) => {
             toRemove.forEach(v => Visuals.remove(v.id));
         }
     };
-    // --- PV MANAGER ---
+    // --- PV MANAGER (Optimized) ---
     const PV = {
         interval: null,
         lastMoves: [],
@@ -1480,14 +1602,14 @@ const getMoveWinPct = (cp, mate) => {
             PV.lastMoves = pvMoves || [];
             if (!settings.showPVArrows) { PV.clear(); return; }
             PV.draw();
-            if (!PV.interval) PV.interval = setInterval(PV.draw, 100);
+            if (!PV.interval) PV.interval = setInterval(PV.draw, 100); // 100ms is fine for PV arrows
         },
-        clear: () => { if (PV.interval) { clearInterval(PV.interval); PV.interval = null; } const cr = ShadowKit.boardRoot(state.board || Platform.getBoard()); if (cr) cr.querySelectorAll('.pv-arrow').forEach(el => el.remove()); },
+        clear: () => { if (PV.interval) { clearInterval(PV.interval); PV.interval = null; } const cr = ShadowKit.boardRoot(BoardManager.get()); if (cr) cr.querySelectorAll('.pv-arrow').forEach(el => el.remove()); },
         draw: () => {
-            state.board = Platform.getBoard();
-            if (!state.board) return;
+            const board = BoardManager.get();
+            if (!board) return;
             if (!settings.showPVArrows || !PV.lastMoves.length) { PV.clear(); return; }
-            const root = ShadowKit.boardRoot(state.board);
+            const root = ShadowKit.boardRoot(board);
             const limit = Math.min(PV.lastMoves.length, settings.pvDepth);
             for (let i = 0; i < limit; i++) {
                 const move = PV.lastMoves[i];
@@ -5279,7 +5401,6 @@ pvSettings: document.getElementById("pvSettings"),
         if (state.ui.logRec) state.ui.logRec.innerText = state.lastResponse;
         if (state.ui.inpDepth && document.activeElement !== state.ui.inpDepth) state.ui.inpDepth.value = settings.depth;
     }
-    const START_FEN_PIECES = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 
     // Clear any per-position analysis state left over from the previous game so a stale
     // best-move / humanAlternatives / mate can't leak into a brand-new game.
@@ -5311,7 +5432,13 @@ pvSettings: document.getElementById("pvSettings"),
     }
 
     function checkAndAnalyze() {
-        state.board = document.querySelector(Platform.getBoardSelectors());
+        // BoardManager handles caching, no need to manually set state.board
+        const board = BoardManager.get();
+        if (!board) {
+            BoardManager.invalidate();
+            return;
+        }
+
         try { HighlightObserver.ensure(); } catch (e) { console.error(`[SF Engine] HighlightObserver failed:`, e); }
         if (settings.showEvalBar) {
             try {
@@ -5320,13 +5447,10 @@ pvSettings: document.getElementById("pvSettings"),
             } catch (e) { console.error(`[SF Engine] EvalBar create failed:`, e); }
         }
 
-        // Single FEN read shared by new-game detection + the analyze trigger
-        const raw = state.board ? getRawBoardFEN() : null;
+        const raw = BoardManager.getFEN();
         const clean = raw ? sanitizeFEN(raw) : "";
 
-        // Detect a brand-new game (board back to the starting position) and clear any
-        // transient analysis state left over from the previous game. Gated so it fires
-        // once per new game (latches while on the start position, releases on any move).
+        // Detect a brand-new game (board back to the starting position)
         if (raw) {
             const pieces = clean.split(" ")[0];
             if (pieces === START_FEN_PIECES) {
@@ -5336,7 +5460,7 @@ pvSettings: document.getElementById("pvSettings"),
             }
         }
 
-        if (state.board && settings.autoRun && raw) {
+        if (settings.autoRun && raw) {
             const isFirstLoad = !state.lastSeenFEN;
             const fenChanged = state.lastSeenFEN && clean !== state.lastSeenFEN;
             
@@ -5350,13 +5474,12 @@ pvSettings: document.getElementById("pvSettings"),
                     state.currentPV = [];
                     if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
                     if (settings.hideAfterMove) {
-                    try {
-                        Visuals.removeByType('history'); Visuals.removeByType('analysis'); PV.clear();
-                        // Reset threat highlight and eval bar on new board
-                        ThreatDetector.clear();
-                        EvalBar._lastPlayingAs = null;
-                        EvalBar.reset();
-                    } catch (e) { console.error(`[SF Engine] overlay cleanup failed:`, e); }
+                        try {
+                            Visuals.removeByType('history'); Visuals.removeByType('analysis'); PV.clear();
+                            ThreatDetector.clear();
+                            EvalBar._lastPlayingAs = null;
+                            EvalBar.reset();
+                        } catch (e) { console.error(`[SF Engine] overlay cleanup failed:`, e); }
                     } else if (settings.showEvalBar) {
                         EvalBar.reset();
                     }
@@ -5368,9 +5491,7 @@ pvSettings: document.getElementById("pvSettings"),
                     lichessState.initPlayerColor();
                 }
                 
-                const tn = Platform.getTurn(state.board);
-                const pn = Platform.getPlayingAs(state.board);
-                const isTurn = (tn === 1 || tn === "w" || tn === "white") === (pn === 1 || pn === "w" || pn === "white");
+                const isTurn = BoardManager.isOurTurn();
                 if (isTurn && clean !== state.lastSanitizedBoardFEN) {
                     // Lichess needs a deterministic first dispatch; the backup poll
                     // must not be the only thing that eventually starts analysis.
