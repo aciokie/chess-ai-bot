@@ -3158,7 +3158,7 @@ self.onmessage = function(e) {
         }
         
         const wasThinking = state.isThinking;
-        let finalFEN = fenOverride || sanitizeFEN(getRawBoardFEN());
+        let finalFEN = fenOverride || sanitizeFEN(BoardManager.getFEN());
         if (!finalFEN) return;
         state.lastSentFEN = finalFEN;
         if (!fenOverride) state.lastSanitizedBoardFEN = finalFEN;
@@ -3799,8 +3799,8 @@ function triggerAutoMove(fen = null) {
      // lastSentFEN, which let stale final callbacks stroke the wrong squares.
      const analyzedFEN = fen || state.lastSentFEN;
      if (!analyzedFEN) { console.warn(`[SF Engine] triggerAutoMove aborted: no analyzed FEN`); return; }
-     const currentRaw = getRawBoardFEN();
-     if (currentRaw && sanitizeFEN(currentRaw).split(" ")[0] !== analyzedFEN.split(" ")[0]) {
+const currentRaw = BoardManager.getFEN();
+      if (currentRaw && sanitizeFEN(currentRaw).split(" ")[0] !== analyzedFEN.split(" ")[0]) {
          console.warn(`[SF Engine] triggerAutoMove aborted: board changed since analysis (analyzed=${analyzedFEN.split(" ")[0]}, current=${sanitizeFEN(currentRaw).split(" ")[0]})`);
          return;
      }
@@ -3877,7 +3877,7 @@ function triggerAutoMove(fen = null) {
         const from = move.substring(0, 2), to = move.substring(2, 4);
         const analyzedFEN = fen || state.lastSentFEN;
         if (!analyzedFEN) { console.warn(`[SF Engine] playMove aborted: no analyzed FEN`); return; }
-        const currentRaw = getRawBoardFEN();
+        const currentRaw = BoardManager.getFEN();
         if (currentRaw && sanitizeFEN(currentRaw).split(" ")[0] !== analyzedFEN.split(" ")[0]) { console.warn(`[SF Engine] playMove aborted: board changed since analysis`); return; }
         // Ownership backstop: ensure the from-square piece belongs to us
         const piecesPart = analyzedFEN.split(" ")[0];
