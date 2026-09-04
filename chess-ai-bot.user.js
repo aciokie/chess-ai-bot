@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chess AI Bot
 // @namespace    https://github.com/aciokie/chess-ai-bot
-// @version      11.1.0
+// @version      11.1.1
 // @description  Chess.com AI assistant with Stockfish engine, auto-play, analysis, eval bar, and opening book
 // @author       aciokie
 // @match        *://*.chess.com/*
@@ -16,8 +16,8 @@
 // @connect      cdn.jsdelivr.net
 // @connect      cdn.statically.io
 // @connect      raw.githubusercontent.com
-// @updateURL    https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js?v=11.1.0
-// @downloadURL  https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js?v=11.1.0
+// @updateURL    https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js?v=11.1.1
+// @downloadURL  https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js?v=11.1.1
 // @run-at       document-start
 // ==/UserScript==
 
@@ -1461,7 +1461,7 @@
             this.panel = document.createElement('div');
             this.panel.id = 'chess-ai-panel';
             this.panel.innerHTML = `
-                <h3>Chess AI Bot <span id="chess-ai-version">v11.1.0</span></h3>
+                <h3>Chess AI Bot <span id="chess-ai-version">v11.1.1</span></h3>
                 <div style="margin-bottom: 10px;">
                     <button id="chess-ai-autoplay" class="btn btn-secondary">Auto Play: OFF</button>
                     <button id="chess-ai-analyze" class="btn btn-secondary">Analysis: OFF</button>
@@ -1745,7 +1745,7 @@
     // ==========================================
 
     async function initialize() {
-        log('Chess AI Bot v11.1.0 starting...');
+        log('Chess AI Bot v11.1.1 starting...');
 
         // Load settings
         Settings.loadAll();
