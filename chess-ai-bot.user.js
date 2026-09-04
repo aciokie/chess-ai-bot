@@ -16,8 +16,8 @@
 // @connect      cdn.jsdelivr.net
 // @connect      cdn.statically.io
 // @connect      raw.githubusercontent.com
-// @updateURL    https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js?v=11.1.1
-// @downloadURL  https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js?v=11.1.1
+// @updateURL    https://cdn.jsdelivr.net/gh/aciokie/chess-ai-bot@main/chess-ai-bot.user.js
+// @downloadURL  https://cdn.jsdelivr.net/gh/aciokie/chess-ai-bot@main/chess-ai-bot.user.js
 // @run-at       document-start
 // ==/UserScript==
 
