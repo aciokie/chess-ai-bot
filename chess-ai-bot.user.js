@@ -1040,12 +1040,12 @@
             UI.showThinking(true);
 
             return new Promise((resolve) => {
-                Engine.getBestMove((move, eval, depth) => {
+                Engine.getBestMove((move, evaluation, depth) => {
                     this.thinking = false;
                     UI.showThinking(false);
 
                     if (move && move !== '(none)') {
-                        log('Engine move:', move, 'eval:', eval, 'depth:', depth);
+                        log('Engine move:', move, 'eval:', evaluation, 'depth:', depth);
                         const from = move.slice(0, 2);
                         const to = move.slice(2, 4);
                         const promotion = move[4] || 'q';
@@ -1615,7 +1615,7 @@
             }
         },
 
-        updateEvaluation(eval, depth, pv) {
+        updateEvaluation(evaluation, depth, pv) {
             if (!this.evalBar || !Settings.get('showEvalBar')) return;
 
             const fill = document.getElementById('chess-ai-eval-fill');
@@ -1623,7 +1623,7 @@
 
             if (fill && text) {
                 // Convert evaluation to percentage (clamped)
-                const clampedEval = Math.max(-10, Math.min(10, eval || 0));
+                const clampedEval = Math.max(-10, Math.min(10, evaluation || 0));
                 const percentage = 50 + (clampedEval * 5); // 0.00 = 50%, +10 = 100%, -10 = 0%
                 fill.style.height = `${Math.max(0, Math.min(100, percentage))}%`;
 
@@ -1632,7 +1632,7 @@
                 else if (clampedEval < -0.5) fill.style.background = 'linear-gradient(to top, #f44747, #ff6b6b)';
                 else fill.style.background = 'linear-gradient(to top, #ffd700, #ffeb3b)';
 
-                text.textContent = eval !== null ? eval.toFixed(2) : '0.00';
+                text.textContent = evaluation !== null ? evaluation.toFixed(2) : '0.00';
             }
         },
 
