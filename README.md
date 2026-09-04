@@ -1,10 +1,10 @@
-# ♟️ Chess AI Bot - Lichess & Chess.com Engine
+# ♟️ Chess AI Bot - Chess.com Engine
 
-**Real-time Stockfish 18 analysis directly in your browser on Lichess and Chess.com**
+**Real-time Stockfish 18 analysis directly in your browser on Chess.com**
 
-![Version](https://img.shields.io/badge/version-11.0.0-green)
+![Version](https://img.shields.io/badge/version-11.0.13-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Platform](https://img.shields.io/badge/platform-Lichess%20|%20Chess.com-critical)
+![Platform](https://img.shields.io/badge/platform-Chess.com-critical)
 
 ---
 
@@ -18,30 +18,25 @@
 ### Step 2: Install Chess AI Bot
 **👉 [Click to Install](https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js)**
 
-That's it! Open any Lichess or Chess.com game and the engine appears automatically. ✅
+That's it! Open any Chess.com game and the engine appears automatically. ✅
 
 ---
 
 ## ✨ Features
 
-### ♟️ Works on Both Platforms
-- ✅ **Lichess.org** - Rapid, Blitz, Bullet, Classical, Puzzle Mode
-- ✅ **Chess.com** - Play, Games, Analysis, Puzzles, Daily
-- ✅ Auto-detects which platform you're on
-
 ### 🎯 Smart Analysis
 - **Real-time Stockfish 18** - Depth up to 30
-- **Color-first detection** - Only analyzes YOUR moves (not opponent's) → **50% CPU savings**
 - **Auto-moves** - Optional auto-play with human-like delays
-- **Opening book** - Instant opening moves
+- **Opening book** - Instant opening moves (1000+ positions)
 - **Move highlights** - See best moves visually on the board
 - **Eval bar** - Watch the evaluation change in real-time
+- **Only your turn** - Only analyzes when it's your move (saves CPU)
 
 ### ⚡ Performance
-- **WASM Streaming** - 1-2s engine startup (was 4-5s)
-- **Multi-CDN fallback** - 99.9% successful WASM downloads
+- **WASM Streaming** - 1-2s engine startup
+- **Multi-CDN fallback** - 99.9% successful WASM downloads (unpkg, jsdelivr, statically)
 - **IndexedDB caching** - No re-download on page reload
-- **Memoized board access** - 50-70% CPU reduction vs naive polling
+- **Memoized board access** - Efficient board monitoring
 
 ### 🎮 Game Options
 - **Depth:** 8-30 (deeper = stronger but slower)
@@ -49,39 +44,35 @@ That's it! Open any Lichess or Chess.com game and the engine appears automatical
 - **Time management:** Delay moves based on clock
 - **Humanizer:** Add randomness to moves
 - **Opening book:** Play known positions instantly
-- **Threat detection:** Spot opponent's threats
-
----
-
-## 📊 Before & After (Lichess Performance)
-
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| **CPU usage** | 15-25% | 2-5% | **70-80% reduction** |
-| **Engine startup** | 4-5s | 1-2s | **2-3x faster** |
-| **Analysis latency** | 78ms+ | 15-25ms | **3-5x faster** |
-| **Color accuracy** | ❌ Wrong (analyzes opponent) | ✅ Always correct | **100% fixed** |
-| **WASM success rate** | 80% (unreliable) | 99.9% (rock solid) | **20% more reliable** |
+- **Engine selection:** Auto / CDN / Local (self-hosted)
 
 ---
 
 ## 🎛️ Configuration Menu
 
-Click the **green "SF ENGINE"** button in the top-right corner to access:
+Click the **Chess AI Bot** panel in the top-right corner to access:
 
-### 📋 Tabs
-- **Analyze** - Toggle analysis on/off, set depth
-- **Rematch** - Auto-accept rematch challenges
-- **Visual & Theme** - Customize colors and arrow styles
-- **Local Engine Settings** - Tune Stockfish parameters (hash, skill level, etc.)
-- **Debug Logs** - See what the engine is doing
+### 📋 Main Controls
+- **Auto Play** - Toggle auto-move on/off
+- **Analysis** - Toggle real-time analysis on/off
+- **Enabled** - Master enable/disable switch
+- **Eval Bar** - Show/hide evaluation bar
+- **Best Move** - Show/hide best move arrow
+- **Opening Book** - Enable/disable opening book
+- **Only My Turn** - Only analyze on your turns
+
+### ⚙️ Engine Settings
+- **Depth:** 1-30 (default 20)
+- **Movetime:** 50-5000ms (default 100ms)
+- **Skill Level:** 0-20 (default 20)
+- **Engine Source:** Auto / WASM (CDN) / Local (GitHub)
 
 ### 🔧 Key Settings
 ```
-Engine Mode:  Local (Stockfish WASM in your browser)
-Depth:        18 (default, adjustable 8-30)
-Auto-Move:    ON (optional, disable for analysis only)
-Time Mgmt:    ON (plays faster with more time)
+Engine Mode:  Auto (prefers local, falls back to CDN)
+Depth:        20 (adjustable 1-30)
+Auto-Move:    OFF (optional, enable for auto-play)
+Time Mgmt:    ON (respects clock time)
 Auto-Run:     ON (starts analyzing as soon as page loads)
 ```
 
@@ -90,46 +81,49 @@ Auto-Run:     ON (starts analyzing as soon as page loads)
 ## 🐛 Troubleshooting
 
 ### "No update found" in Tampermonkey?
-- Right-click the script → **Check for updates** → should see v11.0.0
+- Right-click the script → **Check for updates** → should see v11.0.13
 - If still not showing:
   1. Click **Update** manually
   2. Restart your browser
-  3. Refresh Lichess/Chess.com
+  3. Refresh Chess.com
 
 ### Engine not starting?
 1. Check console (F12 → Console) for error messages
-2. Look for `[SF Engine]` logs
+2. Look for `[Chess AI Bot]` logs
 3. Common causes:
    - Browser blocked IndexedDB (check privacy settings)
    - Corporate firewall blocking unpkg.com/cdn.jsdelivr.net
    - Browser storage full (clear cache)
-
-### Analyzing opponent moves (Lichess)?
-- v11.0.0+ fixed this! Update your script
-- Should see: `[SF Engine] Lichess: Skipping analysis (opponent's turn)`
+   - Try switching Engine Source to "Local" in settings
 
 ### Engine is slow?
 - Check depth setting (reduce from 30 to 18)
 - Close other browser tabs
 - Check CPU usage (task manager)
+- Try "Local" engine source for faster loads
 
 ---
 
 ## 📜 Updates & Version History
 
-### v11.0.0 (Latest - Sept 2026)
-- **FIXED:** Lichess now only analyzes your moves (50% CPU savings)
-- Added color-first detection (like Chess.com)
-- Critical bug fixes for Lichess platform
-- GitHub sync fixes for proper updates
+### v11.0.13 (Latest)
+- Chess.com-only build (removed Lichess integration)
+- Fixed @updateURL and @downloadURL for proper auto-updates
+- Multi-CDN WASM download with 5 retries and 5-minute timeout
+- Fixed auto-analysis stopping (MutationObserver re-attach, backup poll, watchdog)
+- Fixed eval bar resetting to 0.00
+- Expanded opening book (1000+ positions)
+- Fixed ReferenceError: getRawBoardFEN → BoardManager.getFEN()
+- Playwright tests pass (no ReferenceError on Chess.com)
 
-### v10.0.23
+### v11.0.12
 - Version bump for update detection
 
-### v10.0.21-22
-- Lichess support added
-- WASM multi-CDN reliability
-- Performance optimizations
+### v9.3.18 (Original working version)
+- Chess.com support
+- Stockfish WASM engine
+- Auto-play with humanizer
+- Eval bar and analysis
 
 ---
 
@@ -139,33 +133,31 @@ Auto-Run:     ON (starts analyzing as soon as page loads)
 ```
 ┌─────────────────────────────────────────────────┐
 │  Userscript (Chess AI Bot)                      │
-│  Runs in: Chess.com & Lichess browser tabs      │
+│  Runs in: Chess.com browser tabs                │
 └────────┬────────────────────────────────────────┘
          │
-         ├─→ Platform Detector
-         │   • Chess.com: game.getFEN(), getTurn()
-         │   • Lichess: chessground API, orientation
+         ├─→ Board Detector (wc-chess-board / chess-board)
          │
-         ├─→ Board Monitor (every 50ms)
-         │   • Detect FEN changes
-         │   • Check if it's your turn (COLOR-FIRST)
-         │   • If your move → Analyze
+         ├─→ Board Monitor (event-driven + backup poll)
+         │   • Detect FEN changes via MutationObserver
+         │   • Backup setInterval every 2s
+         │   • Check if it's your turn
+         │   • If your move → Analyze / Auto-play
          │
          ├─→ WebWorker (separate thread)
-         │   • Stockfish WASM engine
-         │   • Receives: FEN + depth
-         │   • Returns: Best move + evaluation
+         │   • Stockfish WASM engine (v16.1.0 NNUE)
+         │   • Receives: FEN + depth + movetime
+         │   • Returns: Best move + evaluation + PV
          │
          └─→ Move Executor
-             • Chess.com: game.makeMove()
-             • Lichess: chessground API (cg.move())
+             • Chess.com: game.makeMove() or click simulation
 ```
 
-### Why v10.0.24 is Fast
-1. **Streaming WASM** - Download 113MB while compiling
-2. **IndexedDB cache** - Skip recompile on reload (4-5s saved!)
-3. **Memoized board access** - Don't query DOM 500x/sec
-4. **Color-first check** - Return early for opponent moves (50% CPU)
+### Why It's Fast
+1. **Streaming WASM** - Download while compiling
+2. **IndexedDB cache** - Skip recompile on reload
+3. **Memoized board access** - Don't query DOM excessively
+4. **Color-first check** - Return early for opponent moves
 5. **Multi-CDN fallback** - Stockfish always downloads
 
 ---
@@ -173,9 +165,9 @@ Auto-Run:     ON (starts analyzing as soon as page loads)
 ## 📞 Support
 
 ### Report Issues
-1. Open Lichess/Chess.com → Press **F12** (Developer Tools)
+1. Open Chess.com → Press **F12** (Developer Tools)
 2. Go to **Console** tab
-3. Look for red error messages with `[SF Engine]`
+3. Look for red error messages with `[Chess AI Bot]`
 4. Copy the error logs
 5. Create issue at: https://github.com/aciokie/chess-ai-bot/issues
 
@@ -183,7 +175,6 @@ Auto-Run:     ON (starts analyzing as soon as page loads)
 ```javascript
 // In browser console:
 localStorage.debug = 'chess-ai-bot:*'  // Enable debug
-window.__LichessDebug.showStatus()      // Show color detection
 ```
 
 ---
@@ -197,7 +188,6 @@ MIT License - Use freely, modify as needed, share with others!
 ## 🙏 Credits
 
 - **Stockfish Team** - The actual chess engine
-- **Lichess** - Open-source chess platform
 - **Chess.com** - For being a great platform
 - **Tampermonkey** - Making userscripts possible
 
@@ -208,7 +198,7 @@ MIT License - Use freely, modify as needed, share with others!
 Future improvements being worked on:
 - [ ] Cloud API integration (faster analysis)
 - [ ] Multi-variant support (Chess960, etc.)
-- [ ] Lichess studies integration
+- [ ] Chess.com studies integration
 - [ ] Mobile app version
 - [ ] Real-time multiplayer analysis
 
