@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chess AI Bot
 // @namespace    https://github.com/aciokie/chess-ai-bot
-// @version      11.0.13
+// @version      11.1.0
 // @description  Chess.com AI assistant with Stockfish engine, auto-play, analysis, eval bar, and opening book
 // @author       aciokie
 // @match        *://*.chess.com/*
@@ -149,7 +149,11 @@
             maxTimePerMove: 30,
             preferredEngine: 'auto', // 'auto', 'wasm', 'local'
             boardOrientation: 'auto',
-            evalBarSide: 'left'
+            evalBarSide: 'left',
+            bulletMode: false,
+            bulletWorkers: 1,
+            bulletMovetime: 50,
+            bulletHash: 256
         },
 
         get(key) {
@@ -286,11 +290,12 @@
         },
 
         onBoardChange() {
-            // Debounce rapid changes
+            // Debounce rapid changes - faster in bullet mode
             clearTimeout(this.changeDebounce);
+            const debounceMs = (typeof BulletMode !== 'undefined' && BulletMode.active) ? 10 : 50;
             this.changeDebounce = setTimeout(() => {
                 this.updateState();
-            }, 50);
+            }, debounceMs);
         },
 
         extractInitialState() {
@@ -503,7 +508,12 @@
 
                 if (fromSquare && toSquare) {
                     fromSquare.click();
-                    setTimeout(() => toSquare.click(), 50);
+                    // Bullet mode: instant click-click. Normal: 50ms delay
+                    if (typeof BulletMode !== 'undefined' && BulletMode.active) {
+                        toSquare.click();
+                    } else {
+                        setTimeout(() => toSquare.click(), 50);
+                    }
                     return true;
                 }
             } catch (e) {
@@ -800,6 +810,7 @@
         },
 
         setPosition(fen) {
+            this.lastPositionFen = fen;
             this.sendCommand(`position fen ${fen}`);
         },
 
@@ -822,6 +833,11 @@
         },
 
         getBestMove(callback) {
+            // Delegate to parallel search if bullet mode active
+            if (BulletMode.active) {
+                BulletMode.search(this.lastPositionFen || '', callback);
+                return;
+            }
             this.bestMoveCallback = callback;
             this.sendCommand(`go depth ${this.depth} movetime ${this.movetime}`);
         },
@@ -1034,16 +1050,21 @@
                         const to = move.slice(2, 4);
                         const promotion = move[4] || 'q';
 
-                        // Humanize delay
-                        const delay = humanizeDelay(randomDelay(
-                            Settings.get('autoPlayDelayMin') || CONFIG.AUTO_PLAY_DELAY_MIN,
-                            Settings.get('autoPlayDelayMax') || CONFIG.AUTO_PLAY_DELAY_MAX
-                        ));
-
-                        setTimeout(() => {
+                        // In bullet mode: instant move. Normal: humanize delay
+                        if (BulletMode.active) {
                             const result = BoardManager.makeMove({ from, to, promotion });
                             resolve(result);
-                        }, delay);
+                        } else {
+                            const delay = humanizeDelay(randomDelay(
+                                Settings.get('autoPlayDelayMin') || CONFIG.AUTO_PLAY_DELAY_MIN,
+                                Settings.get('autoPlayDelayMax') || CONFIG.AUTO_PLAY_DELAY_MAX
+                            ));
+
+                            setTimeout(() => {
+                                const result = BoardManager.makeMove({ from, to, promotion });
+                                resolve(result);
+                            }, delay);
+                        }
                     } else {
                         resolve(false);
                     }
@@ -1072,7 +1093,8 @@
                     this.stop();
                     break;
                 }
-                await sleep(1000);
+                // Bullet mode: minimal delay between moves
+                await sleep(BulletMode.active ? 100 : 1000);
             }
         },
 
@@ -1083,6 +1105,208 @@
                 this.start();
             }
             UI.updateAutoPlayButton();
+        }
+    };
+
+    // ==========================================
+    // BULLET MODE - Speed optimization for bullet games
+    // ==========================================
+
+    const BulletMode = {
+        active: false,
+        extraWorker: null,
+        extraWorkerReady: false,
+        pendingCommands: [],
+        lastBestMove: null,
+        lastEvaluation: null,
+        searchTimeout: null,
+
+        async init() {
+            if (!Settings.get('bulletMode')) return;
+            await this.activate();
+        },
+
+        async activate() {
+            if (this.active) return;
+            this.active = true;
+            log('Bullet Mode activating...');
+
+            Settings.set('bulletMode', true);
+
+            // Set main engine to bullet config
+            Engine.setMovetime(Settings.get('bulletMovetime') || 50);
+            Engine.sendCommand(`setoption name Hash value ${Settings.get('bulletHash') || 256}`);
+            Engine.sendCommand('setoption name MultiPV value 1');
+            Engine.sendCommand('setoption name SlowMover value 100');
+
+            // Spin up extra worker
+            await this.createExtraWorker();
+
+            log('Bullet Mode active');
+            UI.updateBulletButton();
+        },
+
+        async deactivate() {
+            if (!this.active) return;
+            this.active = false;
+            log('Bullet Mode deactivating...');
+
+            Settings.set('bulletMode', false);
+
+            // Restore main engine defaults
+            Engine.setMovetime(CONFIG.ENGINE_MOVETIME);
+            Engine.sendCommand(`setoption name Hash value ${CONFIG.ENGINE_HASH}`);
+            Engine.sendCommand(`setoption name MultiPV value ${CONFIG.ENGINE_MULTIPV}`);
+
+            // Kill extra worker
+            this.destroyExtraWorker();
+
+            log('Bullet Mode deactivated');
+            UI.updateBulletButton();
+        },
+
+        async createExtraWorker() {
+            try {
+                // Get engine source from main worker
+                const engineUrl = Engine.currentEngine === 'local'
+                    ? CONFIG.LOCAL_ENGINE_JS
+                    : CONFIG.STOCKFISH_JS_URLS[0];
+
+                const jsCode = await Engine.fetchWithGM(engineUrl);
+                if (!jsCode) throw new Error('Failed to fetch engine code for bullet worker');
+
+                // Patch WASM URL if needed
+                let patchedCode = jsCode;
+                if (Engine.currentEngine === 'wasm') {
+                    const wasmUrl = CONFIG.STOCKFISH_WASM_URLS[0];
+                    patchedCode = jsCode.replace(
+                        /(?:wasmBinaryFile|locateFile)\s*=\s*["'][^"']*["']/g,
+                        `wasmBinaryFile = "${wasmUrl}"`
+                    );
+                }
+
+                this.extraWorker = Engine.createWorkerFromCode(patchedCode);
+                await this.initExtraWorker();
+                log('Bullet extra worker ready');
+            } catch (e) {
+                logError('Bullet worker creation failed:', e);
+                this.extraWorker = null;
+            }
+        },
+
+        async initExtraWorker() {
+            return new Promise((resolve, reject) => {
+                let initialized = false;
+
+                const timeout = setTimeout(() => {
+                    if (!initialized) {
+                        initialized = true;
+                        reject(new Error('Bullet worker init timeout'));
+                    }
+                }, 30000);
+
+                this.extraWorker.onmessage = (e) => {
+                    const msg = e.data;
+
+                    if (!initialized && (msg === 'ready' || msg === 'Stockfish NNUE ready')) {
+                        initialized = true;
+                        clearTimeout(timeout);
+                        this.extraWorker.postMessage('uci');
+                        this.extraWorkerReady = true;
+                        this.processPendingCommands();
+                        resolve();
+                    } else if (msg.startsWith('bestmove')) {
+                        this.handleBestMove(msg);
+                    }
+                };
+
+                this.extraWorker.onerror = (err) => {
+                    if (!initialized) {
+                        initialized = true;
+                        clearTimeout(timeout);
+                        reject(err);
+                    }
+                };
+
+                this.extraWorker.postMessage('uci');
+            });
+        },
+
+        sendCommand(cmd) {
+            if (this.extraWorker && this.extraWorkerReady) {
+                this.extraWorker.postMessage(cmd);
+            } else if (this.extraWorker) {
+                this.pendingCommands.push(cmd);
+            }
+        },
+
+        processPendingCommands() {
+            while (this.pendingCommands.length > 0) {
+                this.sendCommand(this.pendingCommands.shift());
+            }
+        },
+
+        handleBestMove(msg) {
+            const match = msg.match(/bestmove\s+(\w+)/);
+            if (match) {
+                this.lastBestMove = match[1];
+            }
+        },
+
+        search(fen, callback) {
+            if (!this.active || !this.extraWorkerReady) {
+                // Fallback to single worker
+                Engine.getBestMove(callback);
+                return;
+            }
+
+            const timeBudget = Settings.get('bulletMovetime') || 50;
+            this.lastBestMove = null;
+
+            // Send to both workers simultaneously
+            Engine.setPosition(fen);
+            Engine.sendCommand(`go depth ${CONFIG.ENGINE_DEPTH} movetime ${timeBudget}`);
+
+            this.sendCommand(`position fen ${fen}`);
+            this.sendCommand(`go depth ${CONFIG.ENGINE_DEPTH} movetime ${timeBudget}`);
+
+            // Return first result within time budget
+            const startTime = Date.now();
+            const pollInterval = setInterval(() => {
+                if (this.lastBestMove || (Date.now() - startTime) >= timeBudget) {
+                    clearInterval(pollInterval);
+                    // Stop both engines
+                    Engine.sendCommand('stop');
+                    this.sendCommand('stop');
+
+                    const move = this.lastBestMove || Engine.lastBestMove;
+                    if (move && callback) {
+                        callback(move, Engine.lastEvaluation, Engine.lastDepth);
+                    }
+                }
+            }, 5);
+        },
+
+        destroyExtraWorker() {
+            if (this.extraWorker) {
+                this.extraWorker.terminate();
+                this.extraWorker = null;
+                this.extraWorkerReady = false;
+                this.pendingCommands = [];
+            }
+        },
+
+        toggle() {
+            if (this.active) {
+                this.deactivate();
+            } else {
+                this.activate();
+            }
+        },
+
+        destroy() {
+            this.destroyExtraWorker();
+            this.active = false;
         }
     };
 
@@ -1149,6 +1373,15 @@
                 #chess-ai-panel .btn-secondary { background: #3c3c3c; color: #e0e0e0; }
                 #chess-ai-panel .btn-secondary:hover { background: #4a4a4a; }
                 #chess-ai-panel .btn.active { background: #4ec9b0; color: #1e1e1e; }
+                #chess-ai-panel .btn-bullet-active {
+                    background: #f0ad4e;
+                    color: #1e1e1e;
+                    animation: bulletPulse 1.5s ease-in-out infinite;
+                }
+                @keyframes bulletPulse {
+                    0%, 100% { box-shadow: 0 0 5px rgba(240,173,78,0.3); }
+                    50% { box-shadow: 0 0 15px rgba(240,173,78,0.6); }
+                }
                 #chess-ai-panel label { display: flex; align-items: center; margin: 8px 0; cursor: pointer; }
                 #chess-ai-panel input[type="checkbox"] { margin-right: 8px; }
                 #chess-ai-panel select, #chess-ai-panel input[type="number"] {
@@ -1228,10 +1461,16 @@
             this.panel = document.createElement('div');
             this.panel.id = 'chess-ai-panel';
             this.panel.innerHTML = `
-                <h3>Chess AI Bot <span id="chess-ai-version">v11.0.13</span></h3>
+                <h3>Chess AI Bot <span id="chess-ai-version">v11.1.0</span></h3>
                 <div style="margin-bottom: 10px;">
                     <button id="chess-ai-autoplay" class="btn btn-secondary">Auto Play: OFF</button>
                     <button id="chess-ai-analyze" class="btn btn-secondary">Analysis: OFF</button>
+                    <button id="chess-ai-bullet" class="btn btn-secondary">BULLET: OFF</button>
+                </div>
+                <div id="chess-ai-bullet-status" style="display:none; border-top: 1px solid #f0ad4e; padding-top: 8px; margin-top: 8px; font-size: 11px;">
+                    <span style="color: #f0ad4e; font-weight: bold;">BULLET MODE</span><br>
+                    Workers: 2 (1 extra) | Target: 50ms<br>
+                    Hash: 256MB | Delays: None
                 </div>
                 <div style="margin-bottom: 10px;">
                     <label><input type="checkbox" id="chess-ai-enabled" ${Settings.get('enabled') ? 'checked' : ''}> Enabled</label>
@@ -1292,6 +1531,7 @@
 
             document.getElementById('chess-ai-autoplay')?.addEventListener('click', () => AutoPlay.toggle());
             document.getElementById('chess-ai-analyze')?.addEventListener('click', () => Analysis.toggle());
+            document.getElementById('chess-ai-bullet')?.addEventListener('click', () => BulletMode.toggle());
             document.getElementById('chess-ai-reset')?.addEventListener('click', () => {
                 Settings.reset();
                 location.reload();
@@ -1342,6 +1582,18 @@
             if (btn) {
                 btn.textContent = `Analysis: ${Analysis.active ? 'ON' : 'OFF'}`;
                 btn.className = `btn ${Analysis.active ? 'btn-primary' : 'btn-secondary'}`;
+            }
+        },
+
+        updateBulletButton() {
+            const btn = document.getElementById('chess-ai-bullet');
+            const status = document.getElementById('chess-ai-bullet-status');
+            if (btn) {
+                btn.textContent = `BULLET: ${BulletMode.active ? 'ON' : 'OFF'}`;
+                btn.className = `btn ${BulletMode.active ? 'btn-bullet-active' : 'btn-secondary'}`;
+            }
+            if (status) {
+                status.style.display = BulletMode.active ? 'block' : 'none';
             }
         },
 
@@ -1431,8 +1683,13 @@
                 e.preventDefault();
                 if (UI.panel) UI.panel.classList.toggle('chess-ai-hidden');
             }
+            // Alt+B: Toggle bullet mode
+            if (e.altKey && e.key === 'b') {
+                e.preventDefault();
+                BulletMode.toggle();
+            }
         });
-        log('Hotkeys registered: Alt+A (auto), Alt+S (analysis), Alt+E (eval), Alt+R (reload), Alt+O (panel)');
+        log('Hotkeys registered: Alt+A (auto), Alt+S (analysis), Alt+E (eval), Alt+R (reload), Alt+O (panel), Alt+B (bullet)');
     }
 
     // ==========================================
@@ -1488,7 +1745,7 @@
     // ==========================================
 
     async function initialize() {
-        log('Chess AI Bot v11.0.13 starting...');
+        log('Chess AI Bot v11.1.0 starting...');
 
         // Load settings
         Settings.loadAll();
@@ -1499,6 +1756,11 @@
         await Analysis.init();
         UI.init();
         setupHotkeys();
+
+        // Rehydrate bullet mode if previously enabled
+        if (Settings.get('bulletMode')) {
+            await BulletMode.init();
+        }
 
         // Start main loop
         checkAndAnalyze();
