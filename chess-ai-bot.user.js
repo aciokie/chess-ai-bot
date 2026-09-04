@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chess AI Bot
 // @namespace    https://github.com/aciokie/chess-ai-bot
-// @version      11.1.2
+// @version      11.2.0
 // @description  Chess.com AI assistant with Stockfish engine, auto-play, analysis, eval bar, and opening book
 // @author       aciokie
 // @match        *://*.chess.com/*
@@ -153,7 +153,41 @@
             bulletMode: false,
             bulletWorkers: 1,
             bulletMovetime: 50,
-            bulletHash: 256
+            bulletHash: 256,
+            // Original UI settings
+            showPVArrows: false,
+            pvDepth: 15,
+            pvShowNumbers: true,
+            pvCustomGradient: false,
+            pvStartColor: '#4ec9b0',
+            pvEndColor: '#f44747',
+            autoQueue: false,
+            threatDetection: false,
+            timeManagement: true,
+            humanizer: false,
+            humanizeRate: 30,
+            autoRematch: false,
+            showMoveHighlights: true,
+            debugLogs: false,
+            menuOpacity: 0.9,
+            themeBg: '#222222',
+            themeText: '#eeeeee',
+            themeBorder: '#444444',
+            themePrimary: '#81b64c',
+            highlightColor: '#00eeff',
+            visualType: 'boxes',
+            innerOpacity: 0.5,
+            outerOpacity: 0.8,
+            gradientBias: 50,
+            arrowOpacity: 0.8,
+            arrowWidth: 20,
+            visualOutlineOpacity: 0.8,
+            visualOutlineWidth: 2,
+            visualOutlineGlow: false,
+            visualOutlineGlowRadius: 10,
+            hideAfterMove: false,
+            menuPosition: 'top-right',
+            searchMoves: ''
         },
 
         get(key) {
@@ -1331,125 +1365,287 @@
         },
 
         injectStyles() {
+            const s = Settings;
+            const bg = s.get('themeBg');
+            const txt = s.get('themeText');
+            const bdr = s.get('themeBorder');
+            const pri = s.get('themePrimary');
+            const W = CONFIG.EVAL_BAR_WIDTH;
+            const H = CONFIG.EVAL_BAR_HEIGHT;
             const style = document.createElement('style');
             style.textContent = `
+                #chess-ai-panel, #chess-ai-modalOv #chess-ai-modal, #chess-ai-localModalOv #chess-ai-localModal {
+                    --bot-bg: ${bg}; --bot-b: ${bdr}; --bot-p: ${pri}; --bot-t: ${txt};
+                }
+                #chess-ai-panel *, #chess-ai-modal *, #chess-ai-localModal * { box-sizing: border-box; }
+
+                /* ── Main panel ── */
                 #chess-ai-panel {
                     position: fixed;
-                    top: 20px;
-                    right: 20px;
-                    width: 280px;
-                    background: #1e1e1e;
-                    border: 1px solid #333;
-                    border-radius: 8px;
-                    padding: 15px;
-                    z-index: 10000;
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                    color: #e0e0e0;
+                    width: 25vw; height: 50vh;
+                    min-width: 300px; min-height: 300px;
+                    background: var(--bot-bg);
+                    border: 1px solid var(--bot-b);
+                    color: var(--bot-t);
+                    z-index: 9999;
+                    font-family: 'Segoe UI', system-ui, sans-serif;
                     font-size: 13px;
-                    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+                    line-height: 1.4;
+                    box-shadow: -2px 0 20px rgba(0,0,0,0.6);
+                    display: flex;
+                    flex-direction: column;
+                    resize: both;
+                    overflow: hidden;
+                    opacity: ${s.get('menuOpacity')};
+                    border-radius: 6px;
                 }
-                #chess-ai-panel h3 {
-                    margin: 0 0 15px;
-                    color: #4ec9b0;
-                    font-size: 16px;
+                #chess-ai-panel.chess-ai-hidden { display: none !important; }
+
+                /* ── Panel header ── */
+                #chess-ai-panelHeader {
+                    background: var(--bot-p);
+                    color: #000;
+                    padding: 0 12px;
+                    font-weight: 700;
+                    font-size: 12px;
+                    letter-spacing: 0.05em;
+                    text-transform: uppercase;
                     display: flex;
                     justify-content: space-between;
                     align-items: center;
+                    cursor: move;
+                    flex: none;
+                    user-select: none;
+                    height: 36px;
+                    flex-shrink: 0;
                 }
-                #chess-ai-panel .btn {
-                    display: inline-block;
-                    padding: 8px 16px;
-                    margin: 4px;
-                    border: none;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    font-size: 12px;
-                    transition: all 0.2s;
+                #chess-ai-panelHeader .header-left { display: flex; align-items: center; gap: 6px; }
+                #chess-ai-minBtn {
+                    cursor: pointer; display: flex; align-items: center; justify-content: center;
+                    width: 22px; height: 22px; background: rgba(0,0,0,0.15); border-radius: 4px;
+                    font-size: 11px; transition: background 0.15s;
                 }
-                #chess-ai-panel .btn-primary { background: #4ec9b0; color: #1e1e1e; }
-                #chess-ai-panel .btn-primary:hover { background: #3db8a0; }
-                #chess-ai-panel .btn-danger { background: #f44747; color: white; }
-                #chess-ai-panel .btn-danger:hover { background: #e03e3e; }
-                #chess-ai-panel .btn-secondary { background: #3c3c3c; color: #e0e0e0; }
-                #chess-ai-panel .btn-secondary:hover { background: #4a4a4a; }
-                #chess-ai-panel .btn.active { background: #4ec9b0; color: #1e1e1e; }
-                #chess-ai-panel .btn-bullet-active {
-                    background: #f0ad4e;
-                    color: #1e1e1e;
+                #chess-ai-minBtn:hover { background: rgba(0,0,0,0.28); }
+
+                /* ── Panel content ── */
+                #chess-ai-panelContent {
+                    padding: 12px; display: flex; flex-direction: column; gap: 10px;
+                    overflow-y: auto; flex: 1; min-height: 0;
+                }
+
+                /* ── Sections ── */
+                #chess-ai-panel .sect {
+                    border-top: 1px solid var(--bot-b); padding-top: 10px;
+                    display: flex; flex-direction: column; gap: 7px;
+                }
+                #chess-ai-panel .sect-title {
+                    font-size: 0.7em; color: #888; font-weight: 700;
+                    text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px;
+                }
+
+                /* ── Rows ── */
+                #chess-ai-panel .row {
+                    display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 2px;
+                }
+                #chess-ai-panel .row label {
+                    font-size: 0.85em; color: var(--bot-t); opacity: 0.85; font-weight: 500;
+                }
+
+                /* ── Inputs ── */
+                #chess-ai-panel input, #chess-ai-panel select {
+                    background: rgba(255,255,255,0.06); color: var(--bot-t);
+                    border: 1px solid var(--bot-b); padding: 4px 7px; border-radius: 4px;
+                    font-size: 12px; height: 26px; transition: border-color 0.15s;
+                }
+                #chess-ai-panel select { background-color: #2a2a2a; width: 120px; }
+                #chess-ai-panel select option { background-color: #2a2a2a; color: #eeeeee; }
+                #chess-ai-panel input:focus, #chess-ai-panel select:focus { outline: none; border-color: var(--bot-p); }
+                #chess-ai-panel input[type="number"] { width: 60px; text-align: center; }
+                #chess-ai-panel input[type="text"] { flex: 1; }
+                #chess-ai-panel input[type="checkbox"] {
+                    width: 15px; height: 15px; accent-color: var(--bot-p); cursor: pointer; border: none; background: transparent;
+                }
+
+                /* ── Range sliders ── */
+                #chess-ai-panel input[type=range] {
+                    -webkit-appearance: none; width: 100%; background: transparent; padding: 0; margin: 0; border: none; height: 18px;
+                }
+                #chess-ai-panel input[type=range]:focus { outline: none; }
+                #chess-ai-panel input[type=range]::-webkit-slider-runnable-track {
+                    width: 100%; height: 4px; cursor: pointer; background: var(--bot-b); border-radius: 2px;
+                }
+                #chess-ai-panel input[type=range]::-webkit-slider-thumb {
+                    height: 14px; width: 14px; border-radius: 50%; background: var(--bot-p); cursor: pointer;
+                    -webkit-appearance: none; margin-top: -5px; border: 2px solid rgba(0,0,0,0.2);
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.4); transition: transform 0.1s;
+                }
+                #chess-ai-panel input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+
+                /* ── Buttons ── */
+                #chess-ai-panel button {
+                    background: var(--bot-p); border: none; padding: 0 12px; height: 30px; color: #000;
+                    font-weight: 700; font-size: 12px; cursor: pointer; border-radius: 4px;
+                    transition: filter 0.15s, transform 0.1s; letter-spacing: 0.02em; white-space: nowrap;
+                }
+                #chess-ai-panel button:hover { filter: brightness(1.12); }
+                #chess-ai-panel button:active { transform: scale(0.97); }
+                #chess-ai-panel button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; transform: none; }
+                #chess-ai-btnReset {
+                    padding: 0 8px; height: 24px; font-size: 11px;
+                    background: rgba(0,0,0,0.18) !important; color: rgba(0,0,0,0.8) !important; border-radius: 3px;
+                }
+                #chess-ai-custBtn  { background: #4fc3f7 !important; color: #000 !important; }
+                #chess-ai-localBtn { background: #ffcc80 !important; color: #000 !important; }
+                #chess-ai-btnAnalyze { width: 100%; height: 34px; font-size: 13px; letter-spacing: 0.04em; }
+                #chess-ai-custBtn, #chess-ai-localBtn, #chess-ai-btnRematch { width: 100%; }
+                #chess-ai-btnRematch { background: #c0392b !important; color: #fff !important; }
+                .btn-row { display: flex; flex-direction: column; gap: 6px; }
+
+                /* ── Bullet button ── */
+                #chess-ai-bullet { width: 100%; }
+                #chess-ai-bullet.bullet-active {
+                    background: #f0ad4e !important; color: #1e1e1e !important;
                     animation: bulletPulse 1.5s ease-in-out infinite;
                 }
                 @keyframes bulletPulse {
                     0%, 100% { box-shadow: 0 0 5px rgba(240,173,78,0.3); }
                     50% { box-shadow: 0 0 15px rgba(240,173,78,0.6); }
                 }
-                #chess-ai-panel label { display: flex; align-items: center; margin: 8px 0; cursor: pointer; }
-                #chess-ai-panel input[type="checkbox"] { margin-right: 8px; }
-                #chess-ai-panel select, #chess-ai-panel input[type="number"] {
-                    width: 100%;
-                    padding: 6px;
-                    margin: 4px 0 12px;
-                    background: #2d2d2d;
-                    border: 1px solid #444;
-                    border-radius: 4px;
-                    color: #e0e0e0;
+                #chess-ai-bullet-status {
+                    display: none; border-top: 1px solid #f0ad4e; padding-top: 8px; margin-top: 4px;
+                    font-size: 11px; color: #f0ad4e; font-weight: bold;
                 }
+
+                /* ── Log boxes ── */
+                .log-box {
+                    background: rgba(0,0,0,0.4); padding: 7px 9px;
+                    font-family: 'Cascadia Code', 'Fira Mono', monospace; font-size: 0.72em;
+                    border-radius: 4px; overflow-y: auto; word-break: break-all; white-space: pre-wrap;
+                    border: 1px solid var(--bot-b); height: 90px; resize: vertical;
+                    user-select: text !important; -webkit-user-select: text !important; cursor: text; color: #ccc;
+                }
+
+                /* ── Status / Move boxes ── */
+                #chess-ai-statusBox {
+                    background: rgba(0,0,0,0.18); padding: 8px 10px; border: 1px solid rgba(0,188,212,0.35);
+                    border-radius: 5px; font-size: 0.88em; min-height: 42px; width: 100%; flex-shrink: 0;
+                    display: flex; flex-direction: column; gap: 4px;
+                }
+                #chess-ai-moveResult {
+                    background: rgba(0,0,0,0.18); padding: 5px 10px; border-radius: 4px;
+                    text-align: center; font-size: 0.88em; border: 1px solid var(--bot-b);
+                }
+
+                /* ── Automation checkboxes ── */
+                .auto-checks { display: flex; gap: 14px; flex-wrap: wrap; }
+                .auto-checks label { display: flex; align-items: center; gap: 5px; font-size: 0.83em; cursor: pointer; white-space: nowrap; }
+
+                /* ── PV header ── */
+                .pv-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+
+                /* ── Slider groups ── */
+                .slider-group { display: flex; align-items: center; gap: 7px; flex: 1; justify-content: flex-end; }
+                .slider-group input[type=range] { flex: 1; }
+                .slider-group input[type=number] { width: 46px; text-align: center; }
+                .slider-group span { font-size: 0.78em; color: #777; min-width: 14px; }
+
+                /* ── Modal overlay ── */
+                #chess-ai-modalOv, #chess-ai-localModalOv {
+                    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                    background: rgba(0,0,0,0.75); z-index: 10000;
+                    display: none; justify-content: center; align-items: center; backdrop-filter: blur(2px);
+                }
+                /* ── Modals ── */
+                #chess-ai-modal, #chess-ai-localModal {
+                    background: var(--bot-bg); padding: 0; border-radius: 8px; width: 480px;
+                    border: 1px solid var(--bot-b); display: flex; flex-direction: column;
+                    max-height: 90vh; opacity: ${s.get('menuOpacity')}; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+                }
+                #chess-ai-modal *, #chess-ai-localModal * { color: var(--bot-t); }
+                #chess-ai-modal label, #chess-ai-localModal label { opacity: 1 !important; font-weight: 600; font-size: 0.88em; }
+                #chess-ai-modal input[type="color"], #chess-ai-localModal input[type="color"] { height: 26px; padding: 0; width: 40px; cursor: pointer; border: none; }
+                #chess-ai-modal select, #chess-ai-localModal select { height: 26px; padding: 0 6px; font-size: 0.88em; }
+                .modal-header {
+                    display: flex; justify-content: space-between; align-items: center;
+                    padding: 14px 16px; border-bottom: 1px solid var(--bot-b);
+                }
+                .modal-header h3 { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: 0.03em; }
+                .modal-header button {
+                    padding: 0 !important; width: 26px; height: 26px;
+                    background: rgba(255,255,255,0.08) !important; color: var(--bot-t) !important;
+                    border-radius: 4px; font-size: 16px; line-height: 1;
+                }
+                .modal-header button:hover { background: rgba(255,255,255,0.16) !important; }
+                .modal-tabs { display: flex; border-bottom: 1px solid var(--bot-b); }
+                #chess-ai-modal .tab-btn {
+                    flex: 1; background: transparent !important; border: none !important;
+                    border-bottom: 2px solid transparent !important; padding: 10px;
+                    color: var(--bot-t) !important; cursor: pointer; opacity: 0.55;
+                    font-size: 12px; font-weight: 600; letter-spacing: 0.03em;
+                    transition: opacity 0.15s; height: auto;
+                }
+                #chess-ai-modal .tab-btn:hover { opacity: 0.85; }
+                #chess-ai-modal .tab-btn.active { opacity: 1; border-bottom: 2px solid var(--bot-p) !important; }
+                .modal-content { padding: 14px 16px; overflow-y: auto; flex: 1; }
+                #chess-ai-modal .modal-content .row { display: flex; align-items: center; margin-bottom: 11px; }
+                #chess-ai-modal .modal-content .row label { flex: 0 0 128px; text-align: left; font-weight: 600; }
+                #chess-ai-modal .modal-content .row > input[type="text"],
+                #chess-ai-modal .modal-content .row > input[type="color"],
+                #chess-ai-modal .modal-content .row > select { flex: 1; }
+                .theme-presets { display: flex; gap: 8px; margin-bottom: 12px; }
+                #chess-ai-modal .theme-btn {
+                    flex: 1; padding: 0 !important; height: 30px !important;
+                    border: 1px solid var(--bot-b) !important; background: rgba(255,255,255,0.05) !important;
+                    color: var(--bot-t) !important; font-size: 12px !important;
+                }
+                .rgb-inputs { display: flex; gap: 5px; flex: 1; justify-content: flex-end; }
+                .rgb-inputs input { width: 46px; text-align: center; }
+                .adv-toggle {
+                    cursor: pointer; font-size: 0.78em; color: var(--bot-p); text-decoration: none;
+                    margin-top: 4px; display: inline-flex; align-items: center; gap: 4px;
+                    opacity: 0.85; transition: opacity 0.15s;
+                }
+                .adv-toggle:hover { opacity: 1; }
+                .adv-sect { margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--bot-b); display: flex; flex-direction: column; gap: 7px; }
+                .local-action-btn { padding: 0 14px !important; font-size: 0.83em !important; height: 30px !important; }
+                .local-btn-install   { background: #27ae60 !important; color: #fff !important; }
+                .local-btn-reinstall { background: #2980b9 !important; color: #fff !important; }
+                .local-btn-uninstall { background: #c0392b !important; color: #fff !important; }
+                #chess-ai-localModal .info-box {
+                    background: rgba(0,0,0,0.25); border: 1px solid var(--bot-b); border-radius: 4px;
+                    padding: 7px 10px; font-size: 0.78em; font-family: 'Cascadia Code', 'Fira Mono', monospace;
+                    color: #999; word-break: break-all;
+                }
+                #chess-ai-localModal input[type="text"] { width: 100%; font-size: 0.83em; }
+                #chess-ai-localModal select { width: 100%; }
+
+                /* ── Eval bar ── */
                 #chess-ai-eval-bar {
-                    position: fixed;
-                    top: 50%;
-                    transform: translateY(-50%);
-                    width: ${CONFIG.EVAL_BAR_WIDTH}px;
-                    height: ${CONFIG.EVAL_BAR_HEIGHT}px;
-                    background: #2d2d2d;
-                    border: 1px solid #444;
-                    border-radius: 7px;
-                    z-index: 9999;
-                    overflow: hidden;
+                    position: fixed; top: 50%; transform: translateY(-50%);
+                    width: ${W}px; height: ${H}px; background: #2d2d2d; border: 1px solid #444;
+                    border-radius: 7px; z-index: 9999; overflow: hidden;
                 }
                 #chess-ai-eval-bar.left { left: 10px; }
                 #chess-ai-eval-bar.right { right: 10px; }
                 #chess-ai-eval-fill {
-                    position: absolute;
-                    bottom: 0;
-                    left: 0;
-                    right: 0;
-                    background: linear-gradient(to top, #4ec9b0, #6fd9c0);
-                    transition: height 0.3s ease;
+                    position: absolute; bottom: 0; left: 0; right: 0;
+                    background: linear-gradient(to top, #4ec9b0, #6fd9c0); transition: height 0.3s ease;
                 }
                 #chess-ai-eval-text {
-                    position: absolute;
-                    top: 5px;
-                    left: 0;
-                    right: 0;
-                    text-align: center;
-                    font-size: 11px;
-                    font-weight: bold;
-                    color: #e0e0e0;
-                    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+                    position: absolute; top: 5px; left: 0; right: 0; text-align: center;
+                    font-size: 11px; font-weight: bold; color: #e0e0e0; text-shadow: 0 1px 2px rgba(0,0,0,0.5);
                 }
+
+                /* ── Thinking indicator ── */
                 #chess-ai-thinking {
-                    position: fixed;
-                    bottom: 20px;
-                    left: 50%;
-                    transform: translateX(-50%);
-                    background: rgba(30,30,30,0.9);
-                    padding: 10px 20px;
-                    border-radius: 20px;
-                    border: 1px solid #4ec9b0;
-                    color: #4ec9b0;
-                    font-size: 14px;
-                    z-index: 9999;
-                    display: none;
+                    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+                    background: rgba(30,30,30,0.9); padding: 10px 20px; border-radius: 20px;
+                    border: 1px solid var(--bot-p); color: var(--bot-p); font-size: 14px; z-index: 9999; display: none;
                 }
                 #chess-ai-thinking .spinner {
-                    display: inline-block;
-                    width: 16px;
-                    height: 16px;
-                    border: 2px solid #4ec9b0;
-                    border-top-color: transparent;
-                    border-radius: 50%;
-                    animation: spin 1s linear infinite;
-                    margin-right: 10px;
-                    vertical-align: middle;
+                    display: inline-block; width: 16px; height: 16px; border: 2px solid var(--bot-p);
+                    border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;
+                    margin-right: 10px; vertical-align: middle;
                 }
                 @keyframes spin { to { transform: rotate(360deg); } }
                 .chess-ai-hidden { display: none !important; }
@@ -1460,82 +1656,225 @@
         createPanel() {
             this.panel = document.createElement('div');
             this.panel.id = 'chess-ai-panel';
+            const s = Settings;
             this.panel.innerHTML = `
-                <h3>Chess AI Bot <span id="chess-ai-version">v11.1.2</span></h3>
-                <div style="margin-bottom: 10px;">
-                    <button id="chess-ai-autoplay" class="btn btn-secondary">Auto Play: OFF</button>
-                    <button id="chess-ai-analyze" class="btn btn-secondary">Analysis: OFF</button>
-                    <button id="chess-ai-bullet" class="btn btn-secondary">BULLET: OFF</button>
+                <div id="chess-ai-panelHeader">
+                    <div class="header-left">
+                        <span>SF Engine</span>
+                        <span id="chess-ai-minBtn">\u2715</span>
+                    </div>
+                    <button id="chess-ai-btnReset">Reset Defaults</button>
                 </div>
-                <div id="chess-ai-bullet-status" style="display:none; border-top: 1px solid #f0ad4e; padding-top: 8px; margin-top: 8px; font-size: 11px;">
-                    <span style="color: #f0ad4e; font-weight: bold;">BULLET MODE</span><br>
-                    Workers: 2 (1 extra) | Target: 50ms<br>
-                    Hash: 256MB | Delays: None
-                </div>
-                <div style="margin-bottom: 10px;">
-                    <label><input type="checkbox" id="chess-ai-enabled" ${Settings.get('enabled') ? 'checked' : ''}> Enabled</label>
-                    <label><input type="checkbox" id="chess-ai-evalbar" ${Settings.get('showEvalBar') ? 'checked' : ''}> Eval Bar</label>
-                    <label><input type="checkbox" id="chess-ai-bestmove" ${Settings.get('showBestMove') ? 'checked' : ''}> Best Move</label>
-                    <label><input type="checkbox" id="chess-ai-opening" ${Settings.get('useOpeningBook') ? 'checked' : ''}> Opening Book</label>
-                    <label><input type="checkbox" id="chess-ai-onlymyturn" ${Settings.get('onlyMyTurn') ? 'checked' : ''}> Only My Turn</label>
-                </div>
-                <div style="margin-bottom: 10px;">
-                    <label>Depth: <input type="number" id="chess-ai-depth" value="${Settings.get('engineDepth')}" min="1" max="30" style="width: 60px;"></label>
-                    <label>Movetime: <input type="number" id="chess-ai-movetime" value="${Settings.get('engineMovetime')}" min="50" max="5000" step="50" style="width: 70px;"></label>
-                    <label>Skill: <select id="chess-ai-skill" style="width: 80px;">
-                        ${[...Array(21)].map((_, i) => `<option value="${i}" ${i === Settings.get('skillLevel') ? 'selected' : ''}>${i}</option>`).join('')}
-                    </select></label>
-                </div>
-                <div style="margin-bottom: 10px;">
-                    <label>Engine: <select id="chess-ai-engine" style="width: 100%;">
-                        <option value="auto" ${Settings.get('preferredEngine') === 'auto' ? 'selected' : ''}>Auto</option>
-                        <option value="wasm" ${Settings.get('preferredEngine') === 'wasm' ? 'selected' : ''}>WASM (CDN)</option>
-                        <option value="local" ${Settings.get('preferredEngine') === 'local' ? 'selected' : ''}>Local (GitHub)</option>
-                    </select></label>
-                </div>
-                <div style="border-top: 1px solid #333; padding-top: 10px; margin-top: 10px; font-size: 11px; color: #888;">
-                    <button id="chess-ai-reset" class="btn btn-secondary" style="width: 100%;">Reset Settings</button>
-                    <a href="https://github.com/aciokie/chess-ai-bot" target="_blank" style="color: #4ec9b0; text-decoration: none; display: block; text-align: center; margin-top: 8px;">GitHub Repository</a>
+                <div id="chess-ai-panelContent">
+                    <div id="chess-ai-statusBox"></div>
+                    <div id="chess-ai-moveResult"></div>
+
+                    <div class="sect">
+                        <div class="sect-title">Engine</div>
+                        <div class="row">
+                            <label>Model</label>
+                            <select id="chess-ai-engine" style="width:200px;">
+                                <option value="auto" ${s.get('preferredEngine') === 'auto' ? 'selected' : ''}>SF 18.0.0 — Cloud (fast)</option>
+                                <option value="wasm" ${s.get('preferredEngine') === 'wasm' ? 'selected' : ''}>SF 17.1.0 — Cloud (variable)</option>
+                                <option value="local" ${s.get('preferredEngine') === 'local' ? 'selected' : ''}>SF — Local (offline)</option>
+                            </select>
+                        </div>
+                        <div class="row">
+                            <label>Depth <span style="color:#666;">(max <span id="chess-ai-lblMaxDepth">20</span>)</span></label>
+                            <input type="number" id="chess-ai-depth" min="1" max="20" value="${s.get('engineDepth')}">
+                        </div>
+                        <div class="row">
+                            <label>Max Time (ms)</label>
+                            <input type="number" id="chess-ai-movetime" value="${s.get('engineMovetime')}">
+                        </div>
+                        <div class="row">
+                            <label>Skill (0–20)</label>
+                            <input type="number" id="chess-ai-skill" min="0" max="20" value="${s.get('skillLevel')}" style="width:60px;">
+                        </div>
+                        <div class="row">
+                            <label>Search Moves</label>
+                            <input type="text" id="chess-ai-search" value="${s.get('searchMoves')}" placeholder="e.g. e2e4 d2d4">
+                        </div>
+                    </div>
+
+                    <div class="sect">
+                        <div class="pv-header">
+                            <div class="sect-title" style="margin:0;">PV Arrows</div>
+                            <input type="checkbox" id="chess-ai-pvEnabled" ${s.get('showPVArrows') ? 'checked' : ''}>
+                        </div>
+                        <div id="chess-ai-pvSettings" style="${s.get('showPVArrows') ? 'display:flex;' : 'display:none;'} flex-direction:column; gap:7px;">
+                            <div class="row">
+                                <label>Depth (1–45)</label>
+                                <div class="slider-group">
+                                    <input type="range" id="chess-ai-pvDepth" min="1" max="45" step="1" value="${s.get('pvDepth')}">
+                                    <input type="number" id="chess-ai-pvDepthNum" min="1" max="45" value="${s.get('pvDepth')}">
+                                </div>
+                            </div>
+                            <div class="row">
+                                <label>Show Numbers</label>
+                                <input type="checkbox" id="chess-ai-pvNums" ${s.get('pvShowNumbers') ? 'checked' : ''}>
+                            </div>
+                            <div class="row">
+                                <label>Custom Gradient</label>
+                                <input type="checkbox" id="chess-ai-pvGrad" ${s.get('pvCustomGradient') ? 'checked' : ''}>
+                            </div>
+                            <div id="chess-ai-pvGradSettings" style="${s.get('pvCustomGradient') ? 'display:flex;' : 'display:none;'} padding-left:10px; border-left:2px solid #333; margin-top:3px; flex-direction:column; gap:6px;">
+                                <div class="row"><label>Start Color</label><input type="color" id="chess-ai-pvStart" value="${s.get('pvStartColor')}"></div>
+                                <div class="row"><label>End Color</label><input type="color" id="chess-ai-pvEnd" value="${s.get('pvEndColor')}"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="sect">
+                        <div class="sect-title">Automation</div>
+                        <div class="auto-checks">
+                            <label><input type="checkbox" id="chess-ai-enabled" ${s.get('enabled') ? 'checked' : ''}> Auto-Analyze</label>
+                            <label><input type="checkbox" id="chess-ai-autoplay-chk" ${s.get('autoPlay') ? 'checked' : ''}> Auto-Move</label>
+                            <label><input type="checkbox" id="chess-ai-autoQueue" ${s.get('autoQueue') ? 'checked' : ''}> Auto-Queue</label>
+                        </div>
+                        <div class="auto-checks" style="margin-top:4px;">
+                            <label><input type="checkbox" id="chess-ai-threatDet" ${s.get('threatDetection') ? 'checked' : ''}> Threat Detection</label>
+                            <label><input type="checkbox" id="chess-ai-opening" ${s.get('useOpeningBook') ? 'checked' : ''}> Opening Book</label>
+                            <label><input type="checkbox" id="chess-ai-timeMgmt" ${s.get('timeManagement') ? 'checked' : ''}> Time Management</label>
+                        </div>
+                        <div class="auto-checks" style="margin-top:4px;">
+                            <label><input type="checkbox" id="chess-ai-humanizer" ${s.get('humanizer') ? 'checked' : ''}> Humanizer</label>
+                        </div>
+                        <div class="row" style="margin-top:4px;">
+                            <label>Humanize Rate (%)</label>
+                            <input type="number" id="chess-ai-humanizeRate" min="5" max="80" value="${s.get('humanizeRate')}" style="width:60px;">
+                        </div>
+                        <div class="auto-checks" style="margin-top:4px;">
+                            <label><input type="checkbox" id="chess-ai-autoRematch" ${s.get('autoRematch') ? 'checked' : ''}> Auto-Rematch</label>
+                        </div>
+                    </div>
+
+                    <div class="sect">
+                        <div class="sect-title">Display</div>
+                        <div class="row">
+                            <label>Eval Bar</label>
+                            <input type="checkbox" id="chess-ai-evalbar" ${s.get('showEvalBar') ? 'checked' : ''}>
+                        </div>
+                        <div class="row">
+                            <label>Best Move</label>
+                            <input type="checkbox" id="chess-ai-bestmove" ${s.get('showBestMove') ? 'checked' : ''}>
+                        </div>
+                        <div class="row">
+                            <label>Move Highlights</label>
+                            <input type="checkbox" id="chess-ai-moveHighlights" ${s.get('showMoveHighlights') ? 'checked' : ''}>
+                        </div>
+                    </div>
+
+                    <div class="sect">
+                        <div class="sect-title">Bullet Mode</div>
+                        <button id="chess-ai-bullet" class="${s.get('bulletMode') ? 'bullet-active' : ''}">BULLET: ${s.get('bulletMode') ? 'ON' : 'OFF'}</button>
+                        <div id="chess-ai-bullet-status" style="${s.get('bulletMode') ? 'display:block;' : ''}">
+                            <span style="color: #f0ad4e;">BULLET MODE</span><br>
+                            Workers: 2 (1 extra) | Target: 50ms<br>
+                            Hash: 256MB | Delays: None
+                        </div>
+                    </div>
+
+                    <div class="btn-row">
+                        <button id="chess-ai-btnAnalyze">▶ Analyze</button>
+                        <button id="chess-ai-btnRematch">🔄 Rematch</button>
+                        <button id="chess-ai-custBtn">🎨 Visuals & Theme</button>
+                        <button id="chess-ai-localBtn">⚙ Local Engine Settings</button>
+                    </div>
+
+                    <div class="sect">
+                        <div class="row">
+                            <label style="cursor:pointer; display:flex; align-items:center; gap:5px;">
+                                <input type="checkbox" id="chess-ai-debug" ${s.get('debugLogs') ? 'checked' : ''}> Debug Logs
+                            </label>
+                        </div>
+                        <div id="chess-ai-debugArea" style="display:${s.get('debugLogs') ? 'flex' : 'none'}; flex-direction:column; gap:5px;">
+                            <div class="log-box" id="chess-ai-sentCommand"></div>
+                            <div class="log-box" id="chess-ai-receivedMsg"></div>
+                        </div>
+                    </div>
+
+                    <div style="border-top: 1px solid var(--bot-b); padding-top: 8px; font-size: 11px; color: #888; text-align: center;">
+                        <a href="https://github.com/aciokie/chess-ai-bot" target="_blank" style="color: var(--bot-p); text-decoration: none;">GitHub Repository</a>
+                    </div>
                 </div>
             `;
             document.body.appendChild(this.panel);
 
-            // Bind events
+            this.createModals();
             this.bindPanelEvents();
+            this.applyMenuPosition(s.get('menuPosition'));
+            this.makePanelDraggable();
         },
 
         bindPanelEvents() {
-            const bindings = [
-                ['chess-ai-enabled', 'enabled'],
-                ['chess-ai-evalbar', 'showEvalBar'],
-                ['chess-ai-bestmove', 'showBestMove'],
-                ['chess-ai-opening', 'useOpeningBook'],
-                ['chess-ai-onlymyturn', 'onlyMyTurn'],
-                ['chess-ai-depth', 'engineDepth', 'int'],
-                ['chess-ai-movetime', 'engineMovetime', 'int'],
-                ['chess-ai-skill', 'skillLevel', 'int'],
-                ['chess-ai-engine', 'preferredEngine']
-            ];
+            const S = Settings;
+            const $ = id => document.getElementById(id);
 
-            for (const [id, key, type] of bindings) {
-                const el = document.getElementById(id);
-                if (el) {
-                    el.addEventListener('change', () => {
-                        let value = el.type === 'checkbox' ? el.checked : el.value;
-                        if (type === 'int') value = parseInt(value);
-                        Settings.set(key, value);
-                        this.onSettingChange(key, value);
-                    });
-                }
+            const simpleBind = (id, key) => {
+                const el = $(id);
+                if (el) el.addEventListener('change', () => { S.set(key, el.checked); this.onSettingChange(key, el.checked); });
+            };
+            const numBind = (id, key) => {
+                const el = $(id);
+                if (el) el.addEventListener('change', () => { const v = parseInt(el.value); if (!isNaN(v)) { S.set(key, v); this.onSettingChange(key, v); } });
+            };
+
+            // Engine
+            simpleBind('chess-ai-enabled', 'enabled');
+            numBind('chess-ai-depth', 'engineDepth');
+            numBind('chess-ai-movetime', 'engineMovetime');
+            numBind('chess-ai-skill', 'skillLevel');
+            const engineSel = $('chess-ai-engine');
+            if (engineSel) engineSel.addEventListener('change', () => { S.set('preferredEngine', engineSel.value); Engine.reloadEngine(); });
+            const searchEl = $('chess-ai-search');
+            if (searchEl) searchEl.addEventListener('change', () => { S.set('searchMoves', searchEl.value); });
+
+            // PV Arrows
+            simpleBind('chess-ai-pvEnabled', 'showPVArrows');
+            if ($('chess-ai-pvEnabled')) $('chess-ai-pvEnabled').addEventListener('change', function() { $('chess-ai-pvSettings').style.display = this.checked ? 'flex' : 'none'; });
+            const pvDepth = $('chess-ai-pvDepth');
+            const pvDepthNum = $('chess-ai-pvDepthNum');
+            if (pvDepth && pvDepthNum) {
+                pvDepth.addEventListener('input', () => { pvDepthNum.value = pvDepth.value; });
+                pvDepthNum.addEventListener('change', () => { pvDepth.value = pvDepthNum.value; S.set('pvDepth', parseInt(pvDepthNum.value)); });
             }
+            simpleBind('chess-ai-pvNums', 'pvShowNumbers');
+            simpleBind('chess-ai-pvGrad', 'pvCustomGradient');
+            if ($('chess-ai-pvGrad')) $('chess-ai-pvGrad').addEventListener('change', function() { $('chess-ai-pvGradSettings').style.display = this.checked ? 'flex' : 'none'; });
+            const pvStart = $('chess-ai-pvStart');
+            const pvEnd = $('chess-ai-pvEnd');
+            if (pvStart) pvStart.addEventListener('change', () => S.set('pvStartColor', pvStart.value));
+            if (pvEnd) pvEnd.addEventListener('change', () => S.set('pvEndColor', pvEnd.value));
 
-            document.getElementById('chess-ai-autoplay')?.addEventListener('click', () => AutoPlay.toggle());
-            document.getElementById('chess-ai-analyze')?.addEventListener('click', () => Analysis.toggle());
-            document.getElementById('chess-ai-bullet')?.addEventListener('click', () => BulletMode.toggle());
-            document.getElementById('chess-ai-reset')?.addEventListener('click', () => {
-                Settings.reset();
-                location.reload();
-            });
+            // Automation
+            simpleBind('chess-ai-autoplay-chk', 'autoPlay');
+            simpleBind('chess-ai-autoQueue', 'autoQueue');
+            simpleBind('chess-ai-threatDet', 'threatDetection');
+            simpleBind('chess-ai-opening', 'useOpeningBook');
+            simpleBind('chess-ai-timeMgmt', 'timeManagement');
+            simpleBind('chess-ai-humanizer', 'humanizer');
+            numBind('chess-ai-humanizeRate', 'humanizeRate');
+            simpleBind('chess-ai-autoRematch', 'autoRematch');
+
+            // Display
+            simpleBind('chess-ai-evalbar', 'showEvalBar');
+            simpleBind('chess-ai-bestmove', 'showBestMove');
+            simpleBind('chess-ai-moveHighlights', 'showMoveHighlights');
+
+            // Bullet
+            $('chess-ai-bullet')?.addEventListener('click', () => BulletMode.toggle());
+
+            // Action buttons
+            $('chess-ai-btnAnalyze')?.addEventListener('click', () => Analysis.toggle());
+            $('chess-ai-btnRematch')?.addEventListener('click', () => BoardManager.requestRematch());
+            $('chess-ai-btnReset')?.addEventListener('click', () => { S.reset(); location.reload(); });
+            $('chess-ai-custBtn')?.addEventListener('click', () => { $('chess-ai-modalOv').style.display = 'flex'; });
+            $('chess-ai-localBtn')?.addEventListener('click', () => { $('chess-ai-localModalOv').style.display = 'flex'; });
+
+            // Debug
+            simpleBind('chess-ai-debug', 'debugLogs');
+            if ($('chess-ai-debug')) $('chess-ai-debug').addEventListener('change', function() { $('chess-ai-debugArea').style.display = this.checked ? 'flex' : 'none'; });
         },
 
         onSettingChange(key, value) {
@@ -1570,18 +1909,14 @@
         },
 
         updateAutoPlayButton() {
-            const btn = document.getElementById('chess-ai-autoplay');
-            if (btn) {
-                btn.textContent = `Auto Play: ${AutoPlay.active ? 'ON' : 'OFF'}`;
-                btn.className = `btn ${AutoPlay.active ? 'btn-primary' : 'btn-secondary'}`;
-            }
+            const chk = document.getElementById('chess-ai-autoplay-chk');
+            if (chk) chk.checked = Settings.get('autoPlay');
         },
 
         updateAnalysisButton() {
-            const btn = document.getElementById('chess-ai-analyze');
+            const btn = document.getElementById('chess-ai-btnAnalyze');
             if (btn) {
-                btn.textContent = `Analysis: ${Analysis.active ? 'ON' : 'OFF'}`;
-                btn.className = `btn ${Analysis.active ? 'btn-primary' : 'btn-secondary'}`;
+                btn.textContent = Analysis.active ? '⏹ Stop Analysis' : '▶ Analyze';
             }
         },
 
@@ -1590,11 +1925,233 @@
             const status = document.getElementById('chess-ai-bullet-status');
             if (btn) {
                 btn.textContent = `BULLET: ${BulletMode.active ? 'ON' : 'OFF'}`;
-                btn.className = `btn ${BulletMode.active ? 'btn-bullet-active' : 'btn-secondary'}`;
+                btn.className = BulletMode.active ? 'bullet-active' : '';
             }
             if (status) {
                 status.style.display = BulletMode.active ? 'block' : 'none';
             }
+        },
+
+        createModals() {
+            const s = Settings;
+            const visType = s.get('visualType');
+
+            // ── Visuals & Theme modal ──
+            const modalOv = document.createElement('div');
+            modalOv.id = 'chess-ai-modalOv';
+            modalOv.innerHTML = `
+            <div id="chess-ai-modal">
+                <div class="modal-header"><h3>Visuals & Theme</h3><button id="chess-ai-closeModal">\u2715</button></div>
+                <div class="modal-tabs">
+                    <button class="tab-btn active" data-tab="1">Move Display</button>
+                    <button class="tab-btn" data-tab="2">Menu Theme</button>
+                </div>
+                <div class="modal-content" id="chess-ai-tab-content-1">
+                    <div class="row"><label>Display Mode</label>
+                        <select id="chess-ai-visualType">
+                            <option value="boxes" ${visType==='boxes'?'selected':''}>Boxes (original)</option>
+                            <option value="arrow" ${visType==='arrow'?'selected':''}>Arrow Only</option>
+                            <option value="path" ${visType==='path'?'selected':''}>Highlight Path</option>
+                        </select>
+                    </div>
+                    <div id="chess-ai-optBoxes">
+                        <div class="row"><label>Box Opacity</label><input type="range" id="chess-ai-boxOp" min="0" max="100" value="${s.get('innerOpacity')*100}"></div>
+                        <div class="row"><label>Square Opacity</label><input type="range" id="chess-ai-sqOp" min="0" max="100" value="${s.get('outerOpacity')*100}"></div>
+                    </div>
+                    <div id="chess-ai-optArrow" style="display:none;">
+                        <div class="row"><label>Arrow Opacity</label><input type="range" id="chess-ai-arrOp" min="0" max="100" value="${s.get('arrowOpacity')*100}"></div>
+                        <div class="row"><label>Arrow Size</label><input type="range" id="chess-ai-arrSz" min="5" max="80" value="${s.get('arrowWidth')}"></div>
+                    </div>
+                    <div class="row"><label>BIAS: ${visType==='arrow'?'Arrow':'Depth'}</label><input type="range" id="chess-ai-gradBias" min="0" max="100" value="${s.get('gradientBias')}"><span id="chess-ai-gradBiasVal">${s.get('gradientBias')}</span></div>
+                    <div class="row"><label>Custom Gradient</label><input type="checkbox" id="chess-ai-custGrad" ${s.get('pvCustomGradient')?'checked':''}></div>
+                    <div id="chess-ai-gradOpts" style="${s.get('pvCustomGradient')?'display:block':'display:none'}">
+                        <div class="row"><label>Start</label><input type="color" id="chess-ai-gradStart" value="${s.get('pvStartColor')}"></div>
+                        <div class="row"><label>End</label><input type="color" id="chess-ai-gradEnd" value="${s.get('pvEndColor')}"></div>
+                    </div>
+                    <button id="chess-ai-toggleAdv" class="adv-toggle">\u25B6 Advanced Visuals</button>
+                    <div class="adv-sect" id="chess-ai-advSect" style="display:none;">
+                        <div class="row"><label>Outline Opacity</label><input type="range" id="chess-ai-outOp" min="0" max="100" value="${s.get('visualOutlineOpacity')*100}"></div>
+                        <div class="row"><label>Outline Width</label><input type="range" id="chess-ai-outW" min="0" max="50" value="${s.get('visualOutlineWidth')}"></div>
+                        <div class="row"><label>Outline Glow</label><input type="checkbox" id="chess-ai-outGlow" ${s.get('visualOutlineGlow')?'checked':''}></div>
+                        <div class="row"><label>Glow Radius</label><input type="range" id="chess-ai-outRad" min="0" max="50" value="${s.get('visualOutlineGlowRadius')}"></div>
+                    </div>
+                    <div class="row"><label>Highlight Color</label><input type="color" id="chess-ai-hiColor" value="${s.get('highlightColor')}"></div>
+                    <div class="row"><label>Hide after move</label><input type="checkbox" id="chess-ai-hideMove" ${s.get('hideAfterMove')?'checked':''}></div>
+                </div>
+                <div class="modal-content" id="chess-ai-tab-content-2" style="display:none">
+                    <div class="theme-presets"><button id="chess-ai-themeDark">Dark</button><button id="chess-ai-themeLight">Light</button></div>
+                    <div class="row"><label>Background</label><input type="color" id="chess-ai-themeBg" value="${s.get('themeBg')}"></div>
+                    <div class="row"><label>Text</label><input type="color" id="chess-ai-themeText" value="${s.get('themeText')}"></div>
+                    <div class="row"><label>Border</label><input type="color" id="chess-ai-themeBorder" value="${s.get('themeBorder')}"></div>
+                    <div class="row"><label>Primary</label><input type="color" id="chess-ai-themePrimary" value="${s.get('themePrimary')}"></div>
+                    <div class="row"><label>Menu Opacity</label><input type="range" id="chess-ai-menuOp" min="0" max="100" value="${s.get('menuOpacity')*100}"><span id="chess-ai-menuOpVal">${Math.round(s.get('menuOpacity')*100)}</span></div>
+                    <div class="row"><label>Position</label><select id="chess-ai-menuPos">
+                        <option value="top-right" ${s.get('menuPosition')==='top-right'?'selected':''}>Top-Right</option>
+                        <option value="top-left" ${s.get('menuPosition')==='top-left'?'selected':''}>Top-Left</option>
+                        <option value="bottom-right" ${s.get('menuPosition')==='bottom-right'?'selected':''}>Bottom-Right</option>
+                        <option value="bottom-left" ${s.get('menuPosition')==='bottom-left'?'selected':''}>Bottom-Left</option>
+                    </select></div>
+                </div>
+            </div>`;
+            document.body.appendChild(modalOv);
+
+            // ── Local Engine modal ──
+            const localOv = document.createElement('div');
+            localOv.id = 'chess-ai-localModalOv';
+            localOv.innerHTML = `
+            <div id="chess-ai-localModal">
+                <div class="modal-header"><h3>Local Engine Settings</h3><button id="chess-ai-closeLocal">\u2715</button></div>
+                <div class="modal-content">
+                    <div class="row"><label>Model</label><select id="chess-ai-localModel">
+                        <option value="sf_17.1_wasm" ${s.get('localEngineModel')==='sf_17.1_wasm'?'selected':''}>SF 17.1 — WASM</option>
+                        <option value="sf_18.0_wasm" ${s.get('localEngineModel')==='sf_18.0_wasm'?'selected':''}>SF 18.0 — WASM</option>
+                    </select></div>
+                    <div class="info-box">Status: <span id="chess-ai-localStatus">Checking...</span></div>
+                    <div style="display:flex; gap:8px; margin-top:8px;">
+                        <button id="chess-ai-localInstall" class="local-action-btn local-btn-install">Install</button>
+                        <button id="chess-ai-localReinstall" class="local-action-btn local-btn-reinstall">Reinstall</button>
+                        <button id="chess-ai-localUninstall" class="local-action-btn local-btn-uninstall">Uninstall</button>
+                    </div>
+                    <div class="row" style="margin-top:10px;"><label>Hash (MB)</label><input type="number" id="chess-ai-localHash" min="1" max="1024" value="${s.get('localEngineHash')}"></div>
+                    <div class="row"><label>Overhead (μs)</label><input type="number" id="chess-ai-localOverhead" min="0" max="500" value="${s.get('localEngineOverhead')}"></div>
+                    <div class="row"><label>Skill Level</label><input type="number" id="chess-ai-localSkill" min="0" max="20" value="${s.get('skillLevel')}"></div>
+                    <div class="info-box" style="margin-top:8px;">
+                        JS: <a id="chess-ai-localJS" href="https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js" target="_blank" style="color:#81b64c;">CDN link</a><br>
+                        WASM: <a id="chess-ai-localWASM" href="https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.wasm.js" target="_blank" style="color:#81b64c;">CDN link</a>
+                    </div>
+                </div>
+            </div>`;
+            document.body.appendChild(localOv);
+
+            // Modal event handlers
+            $('chess-ai-closeModal')?.addEventListener('click', () => { $('chess-ai-modalOv').style.display = 'none'; });
+            $('chess-ai-closeLocal')?.addEventListener('click', () => { $('chess-ai-localModalOv').style.display = 'none'; });
+
+            // Tabs
+            document.querySelectorAll('#chess-ai-modal .tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('#chess-ai-modal .tab-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    const tab = btn.dataset.tab;
+                    $('chess-ai-tab-content-1').style.display = tab === '1' ? 'block' : 'none';
+                    $('chess-ai-tab-content-2').style.display = tab === '2' ? 'block' : 'none';
+                });
+            });
+
+            // Theme presets
+            $('chess-ai-themeDark')?.addEventListener('click', () => {
+                S.set('themeBg','#222222'); S.set('themeText','#eeeeee'); S.set('themeBorder','#444444'); S.set('themePrimary','#81b64c');
+                location.reload();
+            });
+            $('chess-ai-themeLight')?.addEventListener('click', () => {
+                S.set('themeBg','#f0f0f0'); S.set('themeText','#111111'); S.set('themeBorder','#cccccc'); S.set('themePrimary','#2e7d32');
+                location.reload();
+            });
+
+            // Color pickers
+            [['chess-ai-themeBg','themeBg'],['chess-ai-themeText','themeText'],['chess-ai-themeBorder','themeBorder'],['chess-ai-themePrimary','themePrimary'],['chess-ai-hiColor','highlightColor']].forEach(([id,key]) => {
+                $(id)?.addEventListener('change', () => { S.set(key, $(id).value); location.reload(); });
+            });
+
+            // Highlight color RGB inputs
+            const hiRGB = s.get('highlightColor');
+            const hex2rgb = hex => { const m = hex.match(/\w\w/g); return m ? m.map(x => parseInt(x, 16)) : [0,238,255]; };
+            const rgb = hex2rgb(hiRGB);
+            [['r','0'],['g','1'],['b','2']].forEach(([c,i]) => {
+                const el = $(`chess-ai-hi${c.toUpperCase()}`);
+                if (el) { el.value = rgb[i]; el.addEventListener('change', () => { const r = parseInt($('chess-ai-hiR').value)||0, g = parseInt($('chess-ai-hiG').value)||0, b = parseInt($('chess-ai-hiB').value)||0; S.set('highlightColor', `#${(1<<24|r<<16|g<<8|b).toString(16).slice(1).padStart(6,'0')}`); }); }
+            });
+
+            // Opacity sliders
+            const bindOp = (id, key, numId) => {
+                $(id)?.addEventListener('input', () => { const v = parseInt($(id).value)/100; S.set(key, v); $(numId).textContent = Math.round(v*100); });
+            };
+            bindOp('chess-ai-menuOp','menuOpacity','chess-ai-menuOpVal');
+            bindOp('chess-ai-boxOp','innerOpacity','chess-ai-boxOpVal');
+            bindOp('chess-ai-sqOp','outerOpacity','chess-ai-sqOpVal');
+            bindOp('chess-ai-arrOp','arrowOpacity','chess-ai-arrOpVal');
+            bindOp('chess-ai-arrSz','arrowWidth','chess-ai-arrSzVal');
+            bindOp('chess-ai-gradBias','gradientBias','chess-ai-gradBiasVal');
+            bindOp('chess-ai-outOp','visualOutlineOpacity','chess-ai-outOpVal');
+            bindOp('chess-ai-outW','visualOutlineWidth','chess-ai-outWVal');
+            bindOp('chess-ai-outRad','visualOutlineGlowRadius','chess-ai-outRadVal');
+
+            // Visual type switch
+            $('chess-ai-visualType')?.addEventListener('change', function() {
+                S.set('visualType', this.value);
+                $('chess-ai-optBoxes').style.display = this.value==='boxes'?'block':'none';
+                $('chess-ai-optArrow').style.display = this.value==='arrow'?'block':'none';
+            });
+
+            // Advanced toggle
+            $('chess-ai-toggleAdv')?.addEventListener('click', () => {
+                const sec = $('chess-ai-advSect');
+                const tog = $('chess-ai-toggleAdv');
+                if (sec.style.display==='none') { sec.style.display='flex'; tog.textContent='\u25BC Advanced Visuals'; } else { sec.style.display='none'; tog.textContent='\u25B6 Advanced Visuals'; }
+            });
+
+            // Outline glow
+            $('chess-ai-outGlow')?.addEventListener('change', function() { S.set('visualOutlineGlow', this.checked); });
+
+            // Gradient options
+            $('chess-ai-custGrad')?.addEventListener('change', function() {
+                S.set('pvCustomGradient', this.checked);
+                $('chess-ai-gradOpts').style.display = this.checked ? 'block' : 'none';
+            });
+            $('chess-ai-gradStart')?.addEventListener('change', function() { S.set('pvStartColor', this.value); });
+            $('chess-ai-gradEnd')?.addEventListener('change', function() { S.set('pvEndColor', this.value); });
+
+            // Hide after move
+            $('chess-ai-hideMove')?.addEventListener('change', function() { S.set('hideAfterMove', this.checked); });
+
+            // Menu position
+            $('chess-ai-menuPos')?.addEventListener('change', function() {
+                S.set('menuPosition', this.value);
+                UI.applyMenuPosition(this.value);
+            });
+
+            // Close overlays on outside click
+            modalOv.addEventListener('click', e => { if (e.target === modalOv) modalOv.style.display = 'none'; });
+            localOv.addEventListener('click', e => { if (e.target === localOv) localOv.style.display = 'none'; });
+        },
+
+        applyMenuPosition(pos) {
+            const panel = this.panel;
+            if (!panel) return;
+            panel.style.top = panel.style.right = panel.style.bottom = panel.style.left = '';
+            switch (pos) {
+                case 'top-right':    panel.style.top = '20px'; panel.style.right = '20px'; break;
+                case 'top-left':     panel.style.top = '20px'; panel.style.left = '20px'; break;
+                case 'bottom-right': panel.style.bottom = '20px'; panel.style.right = '20px'; break;
+                case 'bottom-left':  panel.style.bottom = '20px'; panel.style.left = '20px'; break;
+            }
+        },
+
+        makePanelDraggable() {
+            const panel = this.panel;
+            if (!panel) return;
+            const header = panel.querySelector('#chess-ai-panelHeader');
+            if (!header) return;
+            let isDragging = false, startX, startY, origLeft, origTop;
+            const onMouseMove = e => {
+                if (!isDragging) return;
+                e.preventDefault();
+                const dx = e.clientX - startX, dy = e.clientY - startY;
+                panel.style.left = (origLeft + dx) + 'px';
+                panel.style.top  = (origTop  + dy) + 'px';
+                panel.style.right = panel.style.bottom = 'auto';
+            };
+            const onMouseUp = () => { isDragging = false; document.removeEventListener('mousemove', onMouseMove); document.removeEventListener('mouseup', onMouseUp); panel.style.userSelect = ''; };
+            header.addEventListener('mousedown', e => {
+                if (e.target.id === 'chess-ai-minBtn') return;
+                isDragging = true; startX = e.clientX; startY = e.clientY;
+                const rect = panel.getBoundingClientRect();
+                origLeft = rect.left; origTop = rect.top;
+                panel.style.userSelect = 'none';
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+            $('chess-ai-minBtn')?.addEventListener('click', () => { panel.classList.toggle('chess-ai-hidden'); });
         },
 
         createEvalBar() {
@@ -1745,7 +2302,7 @@
     // ==========================================
 
     async function initialize() {
-        log('Chess AI Bot v11.1.2 starting...');
+        log('Chess AI Bot v11.2.0 starting...');
 
         // Load settings
         Settings.loadAll();
