@@ -2157,17 +2157,33 @@ self.onmessage = function(e) {
 
         state.multiPVMap = {};
         state.humanAlternatives = [];
-        const wantMultiPV = settings.humanizer ? 5 : 1;
-        if (state.lastMultiPV !== wantMultiPV) {
-            console.log(`[SF Engine] → setoption name MultiPV value ${wantMultiPV}`);
-            state.localEngine.postMessage(`setoption name MultiPV value ${wantMultiPV}`);
-            state.lastMultiPV = wantMultiPV;
+        let wantMultiPV;
+        if (settings.bulletMode) {
+            wantMultiPV = 3;
+            if (state.lastMultiPV !== wantMultiPV) {
+                console.log(`[SF Engine] → setoption name MultiPV value ${wantMultiPV} (bullet mode: 3 lines)`);
+                state.localEngine.postMessage(`setoption name MultiPV value ${wantMultiPV}`);
+                state.lastMultiPV = wantMultiPV;
+            }
+            const m2 = getEngineById(settings.localModelId);
+            if (m2.hasHash && settings.localHashMB < 256) {
+                console.log(`[SF Engine] → setoption name Hash value 256 (bullet mode)`);
+                state.localEngine.postMessage(`setoption name Hash value 256`);
+            }
+        } else {
+            wantMultiPV = settings.humanizer ? 5 : 1;
+            if (state.lastMultiPV !== wantMultiPV) {
+                console.log(`[SF Engine] → setoption name MultiPV value ${wantMultiPV}`);
+                state.localEngine.postMessage(`setoption name MultiPV value ${wantMultiPV}`);
+                state.lastMultiPV = wantMultiPV;
+            }
         }
         console.log(`[SF Engine] → position fen ${fen}`);
-        console.log(`[SF Engine] → go depth ${actualDepth}`);
+        const goCmd = `go depth ${actualDepth}`;
+        console.log(`[SF Engine] → ${goCmd}`);
         state.currentSearchFEN = fen;
         state.localEngine.postMessage(`position fen ${fen}`);
-        state.localEngine.postMessage(`go depth ${actualDepth}`);
+        state.localEngine.postMessage(goCmd);
         // A dispatch that interrupts a running search makes the old search's
         // bestmove an abort-echo: it was computed for a FEN we've abandoned.
         // Count it so the bestmove handler drops that stale result.
@@ -3105,8 +3121,8 @@ function triggerAutoMove(fen = null) {
             /* ── Bullet Mode ── */
             #btnBullet {
                 width: 100%;
-                background: rgba(0,0,0,0.18) !important;
-                color: rgba(0,0,0,0.8) !important;
+                background: #555 !important;
+                color: #ddd !important;
                 border-radius: 4px;
             }
             #btnBullet.bullet-active {
@@ -3470,8 +3486,9 @@ function triggerAutoMove(fen = null) {
                         <div class="sect-title">Bullet Mode</div>
                         <button id="btnBullet" class="${settings.bulletMode ? 'bullet-active' : ''}">⚡ BULLET: ${settings.bulletMode ? 'ON' : 'OFF'}</button>
                         <div id="bulletStatus" style="${settings.bulletMode ? 'display:block;' : ''}">
-                            ⚡ BULLET MODE<br>
-                            Delays: None | Depth override: 20<br>
+                            ⚡ BULLET MODE ON<br>
+                            Delays: None | MultiPV: 3 | Hash: 256<br>
+                            Obeying depth from main panel<br>
                             Keyboard: Alt+B
                         </div>
                     </div>
