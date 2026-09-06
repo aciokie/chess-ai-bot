@@ -2461,6 +2461,7 @@ self.onmessage = function(e) {
                 <span style="color:#888;">PV:</span> ${pvStr}
             </div>`;
         if (settings.autoMove && isFinal) triggerAutoMove(fen);
+        else if (settings.bulletMode && isFinal && normMate !== null && normMate > 0) triggerAutoMove(fen);
     }
 
     // ─── CLOCK READER ────────────────────────────────────────────────────────
