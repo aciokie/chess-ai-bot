@@ -249,6 +249,9 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         boardObserver: null,
         analysisPauseUntil: 0,
         lastAnalysisCount: 0,
+        premovePending: false,
+        premovePV: [],
+        premovePVIndex: 0,
     };
     const DEFAULT_SETTINGS = {
         engineMode: "local",
@@ -2461,7 +2464,21 @@ self.onmessage = function(e) {
                 <span style="color:#888;">PV:</span> ${pvStr}
             </div>`;
         if (settings.autoMove && isFinal) triggerAutoMove(fen);
-        else if (settings.bulletMode && isFinal && normMate !== null && normMate > 0) triggerAutoMove(fen);
+        else if (settings.bulletMode && isFinal && normMate !== null && normMate > 0 && state.currentBestMove && state.currentPV.length >= 3) {
+            if (isOurTurnNow()) {
+                playMove(state.currentBestMove, fen);
+                const nextOurMove = state.currentPV[2];
+                if (nextOurMove) {
+                    const queued = queuePremove(nextOurMove);
+                    if (queued) {
+                        state.premovePending = true;
+                        state.premovePV = state.currentPV.filter((_, i) => i >= 4 && i % 2 === 0);
+                        state.premovePVIndex = 0;
+                        console.log(`[SF Engine] Bullet: played ${state.currentBestMove}, premove queued ${nextOurMove} (mate in ${normMate}, our moves left: ${state.premovePV.length})`);
+                    }
+                }
+            }
+        }
     }
 
     // ─── CLOCK READER ────────────────────────────────────────────────────────
@@ -2631,6 +2648,52 @@ function triggerAutoMove(fen = null) {
         state.lastMoveResult = `❌ ${type}`;
         updateUI();
     }
+
+    // ─── PREMOVE SYSTEM (Chess.com native) ─────────────────────────────────────
+    // Simulates mouse events on board squares to queue moves in Chess.com's
+    // built-in premove queue. No FEN re-read, no engine re-analysis needed.
+    function getSquareEl(sq) {
+        if (!state.board) return null;
+        const root = state.board.querySelector?.(".cg-board") || state.board;
+        return root.querySelector(`.square-${sq}`) || state.board.querySelector(`[data-square="${sq}"]`);
+    }
+    function getSquareCenter(sq) {
+        const el = getSquareEl(sq);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }
+    function simulateMouseClick(target, x, y) {
+        if (!target) return;
+        const opts = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0, buttons: 1 };
+        target.dispatchEvent(new PointerEvent("pointerdown", { ...opts, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+        target.dispatchEvent(new MouseEvent("mousedown", opts));
+        const upOpts = { ...opts, buttons: 0 };
+        target.dispatchEvent(new PointerEvent("pointerup", { ...upOpts, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+        target.dispatchEvent(new MouseEvent("mouseup", upOpts));
+        target.dispatchEvent(new MouseEvent("click", upOpts));
+    }
+    function queuePremove(uci) {
+        const from = uci.substring(0, 2), to = uci.substring(2, 4);
+        const promo = uci.length > 4 ? uci[4] : null;
+        const fromPos = getSquareCenter(from);
+        const toPos = getSquareCenter(to);
+        if (!fromPos || !toPos) { console.warn(`[SF Engine] premove: can't find squares ${from}/${to}`); return false; }
+        const fromEl = getSquareEl(from), toEl = getSquareEl(to);
+        simulateMouseClick(fromEl, fromPos.x, fromPos.y);
+        simulateMouseClick(toEl, toPos.x, toPos.y);
+        if (promo) {
+            setTimeout(() => {
+                const promoEl = document.querySelector(`cg-promotion [data-piece*="${promo}"]`) ||
+                    document.querySelector(`.promotion-piece q`) ||
+                    document.querySelector(`[data-square="${to}${promo}"]`);
+                if (promoEl) promoEl.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+            }, 80);
+        }
+        console.log(`[SF Engine] premove queued: ${uci}`);
+        return true;
+    }
+
     function playMove(move, fen = null, playingAs = null) {
         console.log(`[SF Engine] playMove: ${move}`);
         if (!state.board?.game) { console.warn(`[SF Engine] playMove aborted: no board`); return; }
@@ -4346,6 +4409,9 @@ pvSettings: document.getElementById("pvSettings"),
         if (state.currentCloudRequest) { try { state.currentCloudRequest.abort(); } catch (_) {} state.currentCloudRequest = null; }
         state.rematchAttempted = false;
         state._justResetForNewGame = true;
+        state.premovePending = false;
+        state.premovePV = [];
+        state.premovePVIndex = 0;
         EvalBar.reset();
         updateUI();
     }
@@ -4390,6 +4456,21 @@ pvSettings: document.getElementById("pvSettings"),
             const tn = state.board.game.getTurn();
             const pn = state.board.game.getPlayingAs();
             const isTurn = (tn === 1 || tn === "w" || tn === "white") === (pn === 1 || pn === "w" || pn === "white");
+            if (state.premovePending && !isTurn) {
+                if (settings.bulletMode && state.premovePV.length > 0 && state.premovePVIndex < state.premovePV.length) {
+                    const nextUci = state.premovePV[state.premovePVIndex];
+                    state.premovePVIndex++;
+                    const queued = queuePremove(nextUci);
+                    if (queued) {
+                        console.log(`[SF Engine] Bullet PV premove: queued ${nextUci} (PV index ${state.premovePVIndex}/${state.premovePV.length})`);
+                        return;
+                    }
+                }
+                state.premovePending = false;
+                state.premovePV = [];
+                state.premovePVIndex = 0;
+                console.log(`[SF Engine] PV premove done, resuming normal analysis`);
+            }
             if (isTurn && clean !== state.lastSanitizedBoardFEN) {
                 // Subtle anti-cheat: rarely skip analysis start (short pause)
                 if (!state.pendingAnalysis && !shouldPauseAnalysis()) {
