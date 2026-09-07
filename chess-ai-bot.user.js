@@ -2797,14 +2797,11 @@ function triggerAutoMove(fen = null) {
          }
      }
 
-     // ─── Anti-Ban: NEW features (centipawn loss, setpoint, attention, accuracy) ──
+     // ─── Anti-Ban: NEW features (centipawn loss, setpoint, accuracy) ──
      let selectedMove = state.currentBestMove;
      let moveReplaced = false;
 
-     // 1. ATTENTION PATTERN: Adjust think time based on opponent's last move
-     const attentionFactor = AntiBan.getAttentionFactor(state.opponentLastMove, analyzedFEN);
-
-     // 2. PERFORMANCE CONSISTENCY: Track accuracy to detect spikes
+     // 1. PERFORMANCE CONSISTENCY: Track accuracy to detect spikes
      if (normEval !== null && state.prevEval !== undefined) {
          AntiBan.trackAccuracy(normEval, state.prevEval);
      }
@@ -2857,20 +2854,8 @@ function triggerAutoMove(fen = null) {
          }
      }
 
-     // ─── Anti-Ban: human-like think time + pattern-break delay + attention ──
-     const moveNum = AntiBan.moveCount + 1;
-     let wait;
-     if (settings.antiBanEnabled) {
-         // Use research-backed log-normal timing
-         wait = AntiBan.getHumanThinkTime(moveNum, analyzedFEN);
-         // Apply attention factor (longer after captures, shorter in opening/endgame)
-         wait = Math.floor(wait * attentionFactor);
-         // Add pattern-break delay if times are too consistent
-         wait += AntiBan.getPatternBreakDelay();
-     } else {
-         // Original behavior
-         wait = Math.max(0, state.moveTargetTime - performance.now());
-     }
+     // ─── Move execution delay (original behavior, no anti-ban timing) ──
+     const wait = Math.max(0, state.moveTargetTime - performance.now());
 
      console.log(`[SF Engine] Playing ${moveReplaced ? 'anti-ban adjusted' : 'best'} move: ${selectedMove} after ${Math.round(wait)}ms`);
      scheduleAutoMove(() => playMove(selectedMove, analyzedFEN), wait);
