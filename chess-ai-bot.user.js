@@ -1898,6 +1898,11 @@ self.onmessage = function(e) {
                             jsCode = jsCode.replace(/new URL\("sf_19\.js",\s*\"[^\"]+\"\)\.href/g, `\"${jsUrl}\"`);
                             console.log(`[SF Engine] Patched import.meta.url -> wasm: ${wasmUrl}, js: ${jsUrl}`);
                         }
+                        // Strip export statements (Lichess sf_19.js is ES module, we run in classic Worker)
+                        if (jsCode && typeof jsCode === "string" && jsCode.indexOf("stockfish-web") !== -1) {
+                            jsCode = jsCode.replace(/\bexport\s+/g, "");
+                            console.log(`[SF Engine] Stripped export statements`);
+                        }
                         // Cache BEFORE building — buildWasmPatchedEngine transfers
                         // wasmBytes.buffer to the worker (zero-copy), which
                         // neuters the ArrayBuffer for structured cloning.
