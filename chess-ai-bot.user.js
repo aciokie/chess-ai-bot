@@ -1381,27 +1381,51 @@ self.fetch = function(url, opts) {
     });
 };
 self.onmessage = function(e) {
-    var d = e.data || {};
-    if (d.__type === "launch" || d.__type === "launch-module") {
-        if (d.wasmModule) {
-            _wasmModule = d.wasmModule;
-            _modulePosted = true;
-            _wasmBytes = new Uint8Array(32);
-            self.postMessage("__probe:module-mode");
-        } else {
-            _wasmBytes = new Uint8Array(d.wasmBytes);
-            self.postMessage("__probe:bytes-received n=" + _wasmBytes.length);
+        var d = e.data || {};
+        if (d.__type === "launch" || d.__type === "launch-module") {
+            if (d.wasmModule) {
+                _wasmModule = d.wasmModule;
+                _modulePosted = true;
+                _wasmBytes = new Uint8Array(32);
+                self.postMessage("__probe:module-mode");
+            } else {
+                _wasmBytes = new Uint8Array(d.wasmBytes);
+                self.postMessage("__probe:bytes-received n=" + _wasmBytes.length);
+            }
+            self.onmessage = null;
+            try {
+                // Patch Lichess sf_19.js: replace ALL import.meta.url with actual URLs
+                // This runs INSIDE the Worker before new Function() executes
+                if (d.jsCode && typeof d.jsCode === "string") {
+                    if (d.jsCode.indexOf("stockfish-web") !== -1 || d.jsCode.indexOf("sf_19") !== -1) {
+                        var wasmUrl = d.wasmUrl || "";
+                        var jsUrl = d.jsUrl || "";
+                        if (!wasmUrl && d.wasmUrl === undefined && typeof __wasmUrl !== "undefined") {
+                            wasmUrl = __wasmUrl;
+                        }
+                        if (!jsUrl && d.jsUrl === undefined && typeof __jsUrl !== "undefined") {
+                            jsUrl = __jsUrl;
+                        }
+                        // Fallback: use the WASM URL passed in the launch message
+                        if (!wasmUrl && d.wasmUrl) wasmUrl = d.wasmUrl;
+                        if (!jsUrl && d.jsUrl) jsUrl = d.jsUrl;
+                        // Replace all import.meta.url
+                        d.jsCode = d.jsCode.replace(/import\.meta\.url/g, '"' + wasmUrl + '"');
+                        // Replace new URL("sf_19.wasm", import.meta.url).href
+                        d.jsCode = d.jsCode.replace(/new URL\("sf_19\.wasm",\s*"[^"]+"\)\.href/g, '"' + wasmUrl + '"');
+                        // Replace new URL("sf_19.js", import.meta.url).href
+                        d.jsCode = d.jsCode.replace(/new URL\("sf_19\.js",\s*"[^"]+"\)\.href/g, '"' + jsUrl + '"');
+                        self.postMessage("__probe:patched-import-meta wasm=" + wasmUrl + " js=" + jsUrl);
+                    }
+                }
+                var F = new Function(d.jsCode);
+                F();
+            } catch (err) {
+                self.postMessage("__probe:loader-error " + (err && err.message || err));
+                throw err;
+            }
         }
-        self.onmessage = null;
-        try {
-            var F = new Function(d.jsCode);
-            F();
-        } catch (err) {
-            self.postMessage("__probe:loader-error " + (err && err.message || err));
-            throw err;
-        }
-    }
-};
+    };
 `;
         const blob = new Blob([bootstrapCode], { type: "application/javascript" });
         const blobUrl = URL.createObjectURL(blob);
@@ -1437,11 +1461,13 @@ self.onmessage = function(e) {
             }
         }
         URL.revokeObjectURL(blobUrl);
+        const wasmUrl = m.wasmUrl || "";
+        const jsUrl = m.jsUrl || "";
         if (moduleMode) {
-            worker.postMessage({ __type: "launch-module", jsCode: jsCode, wasmModule: compiledModule }, [compiledModule]);
+            worker.postMessage({ __type: "launch-module", jsCode: jsCode, wasmModule: compiledModule, wasmUrl, jsUrl }, [compiledModule]);
         } else {
             const ab = wasmBytes instanceof ArrayBuffer ? wasmBytes : wasmBytes.buffer;
-            worker.postMessage({ __type: "launch", jsCode: jsCode, wasmBytes: ab }, [ab]);
+            worker.postMessage({ __type: "launch", jsCode: jsCode, wasmBytes: ab, wasmUrl, jsUrl }, [ab]);
         }
         return worker;
     }
