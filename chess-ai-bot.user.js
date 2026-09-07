@@ -5,8 +5,8 @@
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
-// @updateURL     https://cdn.jsdelivr.net/gh/aciokie/chess-ai-bot@main/chess-ai-bot.user.js?v=11.8.4
-// @downloadURL   https://cdn.jsdelivr.net/gh/aciokie/chess-ai-bot@main/chess-ai-bot.user.js?v=11.8.4
+// @updateURL     https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js
+// @downloadURL   https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js
 // @copyright     2025, Ech0
 // @license       MIT
 // @match         https://www.chess.com/play/*
