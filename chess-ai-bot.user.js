@@ -1323,7 +1323,7 @@ const getMoveWinPct = (cp, mate) => {
     const MODULE_CACHE_VERSION = 1;
 
     // Build a Worker from a patched JS blob (for WASM-based engines)
-    function buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule) {
+    function buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule, wasmUrl, jsUrl) {
         // Bootstrapped worker + zero-copy transfer (replaces the base64 blob).
         // Main thread sends {__type:"launch", jsCode, wasmBytes} with the wasm
         // ArrayBuffer TRANSFERRED (no copy), or {__type:"launch-module"} with a
@@ -1335,6 +1335,8 @@ const getMoveWinPct = (cp, mate) => {
         // bytes-based instantiate call compiles NOTHING — it instantiates the
         // cached module directly (skips the entire 4-5s compile).
         const moduleMode = !!compiledModule;
+        wasmUrl = wasmUrl || "";
+        jsUrl = jsUrl || "";
         const bootstrapCode = `
 var _wasmBytes = null;
 var _wasmModule = null;
@@ -1461,8 +1463,6 @@ self.onmessage = function(e) {
             }
         }
         URL.revokeObjectURL(blobUrl);
-        const wasmUrl = m.wasmUrl || "";
-        const jsUrl = m.jsUrl || "";
         if (moduleMode) {
             worker.postMessage({ __type: "launch-module", jsCode: jsCode, wasmModule: compiledModule, wasmUrl, jsUrl }, [compiledModule]);
         } else {
@@ -1903,7 +1903,7 @@ self.onmessage = function(e) {
                             console.log(`[SF Engine] Caching patched worker data...`);
                             writeCacheAsync(db, patchedKey, { jsCode, wasmBytes }).catch(() => {});
                         }
-                        state.localEngine = buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule);
+                        state.localEngine = buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule, m.wasmUrl, m.jsUrl);
                         state.localEngine.onerror = onEngineWorkerError;
                         state.localEngine.onmessage = handleLocalMessage;
                         console.log(`[SF Engine] WASM worker created, finalizing...`);
