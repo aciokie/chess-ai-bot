@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.3.0
+// @version          11.4.0
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -409,6 +409,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
     // Anti-cheat: occasionally delay analysis start by a short random amount (subtle, not annoying)
     // Returns true when analysis should be skipped this tick (short pause active).
     function shouldPauseAnalysis() {
+        if (settings.bulletMode) return false;
         if (Date.now() < state.analysisPauseUntil) return true;
         state.lastAnalysisCount++;
         if (state.lastAnalysisCount >= getRandomInt(12, 25)) {
@@ -4475,7 +4476,7 @@ pvSettings: document.getElementById("pvSettings"),
                 // Subtle anti-cheat: rarely skip analysis start (short pause)
                 if (!state.pendingAnalysis && !shouldPauseAnalysis()) {
                     // Brief human-glance delay before analyzing (short for cloud-fast)
-                    const glanceMs = settings.engineMode === "cloud" ? getRandomInt(150, 600) : getRandomInt(400, 1200);
+                    const glanceMs = settings.bulletMode ? 0 : (settings.engineMode === "cloud" ? getRandomInt(150, 600) : getRandomInt(400, 1200));
                     state.pendingAnalysis = setTimeout(() => {
                         state.pendingAnalysis = null;
                         try {
