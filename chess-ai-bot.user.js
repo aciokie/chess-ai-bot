@@ -258,6 +258,10 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         premovePending: false,
         premovePV: [],
         premovePVIndex: 0,
+        opponentLastMove: '',
+        lastOpponentCapture: false,
+        lastSeenFENPrev: "",
+        prevEval: null,
     };
     const DEFAULT_SETTINGS = {
         engineMode: "local",
@@ -2700,26 +2704,74 @@ function triggerAutoMove(fen = null) {
          }
      }
 
-     // ─── Anti-Ban: suboptimal move selection (conservative) ──
-     // Only 3% chance, and only if position is not critical
-     if (AntiBan.shouldPlaySuboptimal() && normEval !== null && normEval > 0.5) {
-         const suboptimal = AntiBan.getSuboptimalMove(state.currentPV.map(m => ({ move: m })), state.currentBestMove);
-         if (suboptimal) {
-             console.log(`[SF Engine] Anti-ban: playing suboptimal move ${suboptimal} instead of ${state.currentBestMove}`);
-             // Use human-like think time
-             const moveNum = AntiBan.moveCount + 1;
-             const humanThinkTime = AntiBan.getHumanThinkTime(moveNum, analyzedFEN);
-             scheduleAutoMove(() => playMove(suboptimal, analyzedFEN), humanThinkTime);
-             return;
+     // ─── Anti-Ban: NEW features (centipawn loss, setpoint, attention, accuracy) ──
+     let selectedMove = state.currentBestMove;
+     let moveReplaced = false;
+
+     // 1. ATTENTION PATTERN: Adjust think time based on opponent's last move
+     const attentionFactor = AntiBan.getAttentionFactor(state.opponentLastMove, analyzedFEN);
+
+     // 2. PERFORMANCE CONSISTENCY: Track accuracy to detect spikes
+     if (normEval !== null && state.prevEval !== undefined) {
+         AntiBan.trackAccuracy(normEval, state.prevEval);
+     }
+     state.prevEval = normEval;
+
+     // 3. ACCURACY SPIKE: If we've been too accurate recently, play a slightly worse move
+     if (!moveReplaced && AntiBan.isAccuracySpiking()) {
+         const spikeMove = AntiBan.getSpikeReductionMove(
+             state.currentPV.map(m => ({ move: m })), selectedMove
+         );
+         if (spikeMove) {
+             console.log(`[SF Engine] Anti-ban: accuracy spike detected, playing ${spikeMove} instead of ${selectedMove}`);
+             selectedMove = spikeMove;
+             moveReplaced = true;
          }
      }
 
-     // ─── Anti-Ban: human-like think time + pattern-break delay ──
+     // 4. CENTI pawn LOSS INJECTION: When winning, play moves that lose 20-50cp
+     if (!moveReplaced && AntiBan.shouldInjectCentipawnLoss(normEval, AntiBan.moveCount + 1)) {
+         const cpLossMove = AntiBan.getCentipawnLossMove(
+             state.currentPV.map(m => ({ move: m })), selectedMove, normEval
+         );
+         if (cpLossMove) {
+             console.log(`[SF Engine] Anti-ban: centipawn loss injection, playing ${cpLossMove} (losing 20-50cp)`);
+             selectedMove = cpLossMove;
+             moveReplaced = true;
+         }
+     }
+
+     // 5. SETPOINT SYSTEM: When winning big, play moves that maintain comfortable advantage
+     if (!moveReplaced && AntiBan.shouldUseSetpoint(normEval, AntiBan.moveCount + 1)) {
+         const setpointMove = AntiBan.getSetpointMove(
+             state.currentPV.map(m => ({ move: m })), selectedMove, normEval
+         );
+         if (setpointMove) {
+             console.log(`[SF Engine] Anti-ban: setpoint move, playing ${setpointMove} (maintaining comfortable advantage)`);
+             selectedMove = setpointMove;
+             moveReplaced = true;
+         }
+     }
+
+     // ─── Anti-Ban: suboptimal move selection (conservative) ──
+     // Only 3% chance, and only if position is not critical
+     if (!moveReplaced && AntiBan.shouldPlaySuboptimal() && normEval !== null && normEval > 0.5) {
+         const suboptimal = AntiBan.getSuboptimalMove(state.currentPV.map(m => ({ move: m })), selectedMove);
+         if (suboptimal) {
+             console.log(`[SF Engine] Anti-ban: playing suboptimal move ${suboptimal} instead of ${selectedMove}`);
+             selectedMove = suboptimal;
+             moveReplaced = true;
+         }
+     }
+
+     // ─── Anti-Ban: human-like think time + pattern-break delay + attention ──
      const moveNum = AntiBan.moveCount + 1;
      let wait;
      if (settings.antiBanEnabled) {
          // Use research-backed log-normal timing
          wait = AntiBan.getHumanThinkTime(moveNum, analyzedFEN);
+         // Apply attention factor (longer after captures, shorter in opening/endgame)
+         wait = Math.floor(wait * attentionFactor);
          // Add pattern-break delay if times are too consistent
          wait += AntiBan.getPatternBreakDelay();
      } else {
@@ -2727,8 +2779,8 @@ function triggerAutoMove(fen = null) {
          wait = Math.max(0, state.moveTargetTime - performance.now());
      }
 
-     console.log(`[SF Engine] Playing best move: ${state.currentBestMove} after ${Math.round(wait)}ms`);
-     scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), wait);
+     console.log(`[SF Engine] Playing ${moveReplaced ? 'anti-ban adjusted' : 'best'} move: ${selectedMove} after ${Math.round(wait)}ms`);
+     scheduleAutoMove(() => playMove(selectedMove, analyzedFEN), wait);
  }
     function handleError(type, err) {
         state.isThinking = !1;
@@ -4571,6 +4623,20 @@ pvSettings: document.getElementById("pvSettings"),
             const tn = state.board.game.getTurn();
             const pn = state.board.game.getPlayingAs();
             const isTurn = (tn === 1 || tn === "w" || tn === "white") === (pn === 1 || pn === "w" || pn === "white");
+
+            // Track opponent's last move for attention pattern simulation
+            if (!isTurn && state.lastSeenFENPrev && clean !== state.lastSeenFENPrev) {
+                // Opponent just moved — try to detect if it was a capture
+                const prevBoard = state.lastSeenFENPrev.split(' ')[0];
+                const currBoard = clean.split(' ')[0];
+                // Simple heuristic: if piece count decreased, it was a capture
+                let prevPieceCount = 0, currPieceCount = 0;
+                for (const c of prevBoard) { if (c !== '/' && c !== ' ') prevPieceCount++; }
+                for (const c of currBoard) { if (c !== '/' && c !== ' ') currPieceCount++; }
+                state.opponentLastMove = currPieceCount < prevPieceCount ? 'x' : '';
+                state.lastOpponentCapture = currPieceCount < prevPieceCount;
+            }
+            state.lastSeenFENPrev = clean;
             if (state.premovePending && !isTurn) {
                 if (settings.bulletMode && state.premovePV.length > 0 && state.premovePVIndex < state.premovePV.length) {
                     const nextUci = state.premovePV[state.premovePVIndex];
@@ -4998,6 +5064,137 @@ pvSettings: document.getElementById("pvSettings"),
             return getRandomInt(200, 600);
         },
 
+        // ─── NEW ANTI-BAN FEATURES (Research-backed) ───────────────────────
+
+        // 1. CENTI pawn LOSS INJECTION: Play moves that lose 20-50 centipawns
+        //    Humans naturally make small inaccuracies; engines have ~0 centipawn loss
+        //   Chess.com checks ACPL (Average Centipawn Loss) — too low = suspicious
+        shouldInjectCentipawnLoss(normEval, moveNumber) {
+            if (!settings.antiBanEnabled || settings.bulletMode) return false;
+            // Only inject when we're winning (positive eval)
+            if (normEval === null || normEval < 0.5) return false;
+            // Higher probability in opening (humans make more mistakes early)
+            let prob = moveNumber <= 10 ? 0.15 : moveNumber <= 25 ? 0.08 : 0.04;
+            // When winning big, inject more often (humans relax when winning)
+            if (normEval > 3.0) prob += 0.05;
+            return Math.random() < prob;
+        },
+
+        // Get a move that loses a small number of centipawns (20-50cp)
+        // Returns null if no suitable move found (safety: never play losing moves)
+        getCentipawnLossMove(alternatives, currentBest, normEval) {
+            if (!alternatives || alternatives.length < 2) return null;
+            // Find moves that lose 20-50 centipawns but don't flip evaluation
+            const candidates = [];
+            for (let i = 1; i < alternatives.length; i++) {
+                const alt = alternatives[i];
+                if (alt.evalRaw !== undefined && alternatives[0].evalRaw !== undefined) {
+                    const loss = alternatives[0].evalRaw - alt.evalRaw;  // Positive = worse for us
+                    // Accept 20-50cp loss, but only if we stay winning
+                    if (loss >= 0.20 && loss <= 0.50 && (normEval - loss) > 0.3) {
+                        candidates.push(alt);
+                    }
+                }
+            }
+            if (candidates.length === 0) return null;
+            return candidates[Math.floor(Math.random() * candidates.length)].move;
+        },
+
+        // 2. SETPOINT SYSTEM: Target a specific eval range, not always the best
+        //    Humans naturally play moves that maintain a comfortable advantage
+        //    rather than always finding the absolute best move
+        shouldUseSetpoint(normEval, moveNumber) {
+            if (!settings.antiBanEnabled || settings.bulletMode) return false;
+            // Only use setpoint when we have a clear advantage
+            if (normEval === null || normEval < 1.0) return false;
+            // 5% chance to play a "setpoint" move instead of best
+            return Math.random() < 0.05;
+        },
+
+        // Get a move that maintains eval within a comfortable range
+        getSetpointMove(alternatives, currentBest, normEval) {
+            if (!alternatives || alternatives.length < 2) return null;
+            // Target: maintain eval between +0.5 and +1.5 (comfortable advantage)
+            const targetMin = 0.5;
+            const targetMax = 1.5;
+            const candidates = [];
+            for (let i = 1; i < alternatives.length; i++) {
+                const alt = alternatives[i];
+                if (alt.evalRaw !== undefined) {
+                    // Check if this move keeps us in the target range
+                    if (alt.evalRaw >= targetMin && alt.evalRaw <= targetMax) {
+                        candidates.push(alt);
+                    }
+                }
+            }
+            if (candidates.length === 0) return null;
+            return candidates[Math.floor(Math.random() * candidates.length)].move;
+        },
+
+        // 3. ATTENTION PATTERN SIMULATION: Vary response times based on context
+        //    Humans don't think at constant speed — they think longer after opponent
+        //    makes unexpected moves, shorter when moves are obvious
+        getAttentionFactor(opponentLastMove, fen) {
+            if (!settings.antiBanEnabled) return 1.0;
+            let factor = 1.0;
+            // After opponent takes a piece, think longer ( humans check if it's safe)
+            if (opponentLastMove && (opponentLastMove.includes('x') || opponentLastMove.includes('X'))) {
+                factor += 0.3;  // +30% think time after captures
+            }
+            // In endgame, think faster (fewer pieces = simpler decisions)
+            if (this.gamePhase === 'endgame') {
+                factor *= 0.7;  // -30% in endgame
+            }
+            // In opening, think faster (memorized theory)
+            if (this.gamePhase === 'opening') {
+                factor *= 0.6;  // -40% in opening
+            }
+            return Math.max(0.3, Math.min(2.0, factor));
+        },
+
+        // 4. PERFORMANCE CONSISTENCY: Track accuracy over time, avoid spikes
+        //    Sudden 20%+ accuracy jump is flagged by Chess.com's ML models
+        accuracyHistory: [],
+        lastAccuracyCheck: 0,
+
+        trackAccuracy(normEval, prevEval) {
+            if (!settings.antiBanEnabled || normEval === null || prevEval === null) return;
+            // Calculate accuracy as how close we played to best (0-100%)
+            const evalSwing = Math.abs(normEval - prevEval);
+            // If eval didn't change much, we played accurately
+            const accuracy = evalSwing < 0.1 ? 95 : evalSwing < 0.3 ? 85 : evalSwing < 0.5 ? 75 : 60;
+            this.accuracyHistory.push(accuracy);
+            if (this.accuracyHistory.length > 20) this.accuracyHistory.shift();
+        },
+
+        isAccuracySpiking() {
+            if (this.accuracyHistory.length < 10) return false;
+            // Calculate recent accuracy (last 5 moves)
+            const recent = this.accuracyHistory.slice(-5);
+            const recentAvg = recent.reduce((a, b) => a + b, 0) / recent.length;
+            // Calculate overall accuracy
+            const overallAvg = this.accuracyHistory.reduce((a, b) => a + b, 0) / this.accuracyHistory.length;
+            // If recent accuracy is 20%+ higher than overall, it's a spike
+            return (recentAvg - overallAvg) > 20;
+        },
+
+        // Get a slightly worse move when accuracy is spiking
+        getSpikeReductionMove(alternatives, currentBest) {
+            if (!alternatives || alternatives.length < 2) return null;
+            if (!this.isAccuracySpiking()) return null;
+            // Pick a move that's slightly worse (within 0.3 pawns)
+            const candidates = [];
+            for (let i = 1; i < alternatives.length; i++) {
+                const alt = alternatives[i];
+                if (alt.evalRaw !== undefined && alternatives[0].evalRaw !== undefined) {
+                    const diff = alternatives[0].evalRaw - alt.evalRaw;
+                    if (diff >= 0.1 && diff <= 0.3) candidates.push(alt);
+                }
+            }
+            if (candidates.length === 0) return null;
+            return candidates[Math.floor(Math.random() * candidates.length)].move;
+        },
+
         // Reset state for new game
         reset() {
             this.moveCount = 0;
@@ -5005,6 +5202,8 @@ pvSettings: document.getElementById("pvSettings"),
             this.avgMoveTime = 0;
             this.prevThinkTime = 1000;
             this.gamePhase = 'middlegame';
+            this.accuracyHistory = [];
+            this.lastAccuracyCheck = 0;
         },
 
         // Log anti-ban activity
@@ -5057,7 +5256,7 @@ pvSettings: document.getElementById("pvSettings"),
     scheduleBackupPoll();
     startGameOverPoll();
     AntiDraw.start();
-    AntiBan.log('active (timing jitter, depth variation, suboptimal moves)');
+    AntiBan.log('active (timing jitter, depth variation, suboptimal moves, centipawn loss, setpoint, attention patterns, accuracy consistency)');
     if (typeof GM_xmlhttpRequest === "function") {
         let ver = "";
         try { if (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) ver = String(GM_info.script.version); } catch (e) {}
