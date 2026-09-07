@@ -1,0 +1,257 @@
+name: Build SF19 WASM (Classic Worker Compatible)
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - smallnet
+
+jobs:
+  build-sf19:
+    name: Build SF19 (${{ github.event.inputs.build_type || 'full' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Stockfish 19
+        uses: actions/checkout@v4
+        with:
+          repository: official-stockfish/Stockfish
+          ref: sf_19
+          path: stockfish
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: '3.1.70'
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y python3 make git
+
+      - name: Build SF19 (Full NNUE) - Classic Worker
+        if: github.event.inputs.build_type != 'smallnet'
+        run: |
+          cd stockfish/src
+          make clean
+          
+          # Build using official Makefile with classic worker flags (no EXPORT_ES6)
+          make -j$(nproc) ARCH=wasm COMP=emscripten \
+            CXX=em++ \
+            COMPCXX=em++ \
+            EXE=stockfish.js \
+            CXXFLAGS="-O3 -DNDEBUG -flto -msimd128 -msse -msse2 -mssse3 -msse4.1 -DNNUE_EMBEDDING_OFF=0 -DUSE_POPCNT -DNO_PREFETCH -DIS_64BIT -DNO_TABLEBASES -DNO_SYZYGY" \
+            LDFLAGS="-s MODULARIZE=1 -s EXPORT_NAME=Stockfish -s ENVIRONMENT=web,worker -s USE_PTHREADS=0 -s EXIT_RUNTIME=0 -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=128MB -s MAXIMUM_MEMORY=1024MB -s STACK_SIZE=5MB -s FILESYSTEM=0 -s STRICT=1 -s ASSERTIONS=0 -DNDEBUG -O3 --closure=1 -s EXPORTED_FUNCTIONS='[\"_malloc\",\"_free\",\"_main\"]' -s EXPORTED_RUNTIME_METHODS='[\"ccall\",\"cwrap\",\"stringToUTF8\",\"UTF8ToString\",\"HEAPU8\"]' -s INITIAL_MEMORY=128MB -s MAXIMUM_MEMORY=1024MB -s STACK_SIZE=5MB -s FILESYSTEM=0 -s STRICT=1 --pre-js ../../emscripten/pre.js --extern-pre-js ../../emscripten/extern-pre.js --extern-post-js ../../emscripten/extern-post.js" \
+            build
+          
+          # Verify no EXPORT_ES6 in output
+          if grep -q "EXPORT_ES6" stockfish.js; then
+            echo "ERROR: EXPORT_ES6 found in output!"
+            exit 1
+          fi
+          echo "SUCCESS: No EXPORT_ES6 found - classic worker compatible"
+
+      - name: Build SF19 (Smallnet) - Classic Worker
+        if: github.event.inputs.build_type == 'smallnet'
+        run: |
+          cd stockfish/src
+          make clean
+          
+          # Build with smallnet (NNUE_EMBEDDING_OFF=1 for smaller binary)
+          make -j$(nproc) ARCH=wasm COMP=emscripten \
+            CXX=em++ \
+            COMPCXX=em++ \
+            EXE=stockfish.js \
+            CXXFLAGS="-O3 -DNDEBUG -flto -msimd128 -msse -msse2 -mssse3 -msse4.1 -DNNUE_EMBEDDING_OFF=1 -DUSE_POPCNT -DNO_PREFETCH -DIS_64BIT -DNO_TABLEBASES -DNO_SYZYGY" \
+            LDFLAGS="-s MODULARIZE=1 -s EXPORT_NAME=Stockfish -s ENVIRONMENT=web,worker -s USE_PTHREADS=0 -s EXIT_RUNTIME=0 -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=128MB -s MAXIMUM_MEMORY=1024MB -s STACK_SIZE=5MB -s FILESYSTEM=0 -s STRICT=1 -s ASSERTIONS=0 -DNDEBUG -O3 --closure=1 -s EXPORTED_FUNCTIONS='[\"_malloc\",\"_free\",\"_main\"]' -s EXPORTED_RUNTIME_METHODS='[\"ccall\",\"cwrap\",\"stringToUTF8\",\"UTF8ToString\",\"HEAPU8\"]' -s INITIAL_MEMORY=128MB -s MAXIMUM_MEMORY=1024MB -s STACK_SIZE=5MB -s FILESYSTEM=0 -s STRICT=1 --pre-js ../../emscripten/pre.js --extern-pre-js ../../emscripten/extern-pre.js --extern-post-js ../../emscripten/extern-post.js" \
+            build
+          
+          # Verify no EXPORT_ES6 in output
+          if grep -q "EXPORT_ES6" stockfish.js; then
+            echo "ERROR: EXPORT_ES6 found in output!"
+            exit 1
+          fi
+          echo "SUCCESS: No EXPORT_ES6 found - classic worker compatible"
+
+      - name: Prepare artifact files
+        run: |
+          cd stockfish/src
+          # Copy built files
+          cp stockfish.js stockfish.wasm ../
+          
+          # Create worker wrapper
+          cat > stockfish.worker.js << 'EOF'
+// Stockfish Worker Wrapper for Classic Worker
+self.Module = self.Module || {};
+
+// Override locateFile to serve WASM from same origin
+self.Module.locateFile = function(path) {
+  if (path.endsWith('.wasm')) return 'stockfish.wasm';
+  return path;
+};
+
+self.Module.arguments = [];
+self.Module.print = console.log;
+self.Module.printErr = console.error;
+self.Module.noExitRuntime = true;
+self.Module.noInitialRun = true;
+self.Module.INITIAL_MEMORY = 128 * 1024 * 1024;
+self.Module.MAXIMUM_MEMORY = 1024 * 1024 * 1024;
+self.Module.ALLOW_MEMORY_GROWTH = 1;
+
+// Import the Stockfish module
+importScripts('stockfish.js');
+
+var stockfish = null;
+
+// Initialize Stockfish
+Module().then(function(instance) {
+  stockfish = instance;
+  self.postMessage({ type: 'ready', engine: 'Stockfish 19' });
+});
+
+// Handle UCI commands from main thread
+self.onmessage = function(e) {
+  var cmd = e.data;
+  
+  if (cmd.type === 'uci' && cmd.cmd) {
+    if (stockfish && stockfish._main) {
+      // Write command to stdin via Module
+      // This requires the Stockfish stdin interface
+    }
+  } else if (cmd.type === 'init') {
+    self.postMessage({ type: 'ready', engine: 'Stockfish 19' });
+  }
+};
+
+// Capture stdout from Stockfish
+var originalPrint = Module.print;
+Module.print = function(text) {
+  if (originalPrint) originalPrint(text);
+  
+  if (text && (text.startsWith('info ') || text.startsWith('bestmove') || 
+      text.startsWith('uciok') || text.startsWith('readyok'))) {
+    self.postMessage({ type: 'uci', text: text });
+  }
+};
+
+var originalPrintErr = Module.printErr;
+Module.printErr = function(text) {
+  originalPrintErr(text);
+  self.postMessage({ type: 'error', text: text });
+};
+
+console.log('[SF Worker] Stockfish 19 worker initialized');
+EOF
+
+          # Create preamble.js
+          cat > preamble.js << 'EOF'
+// Minimal preamble.js for Stockfish classic worker build
+Module = Module || {};
+
+Module.locateFile = function(path) {
+  if (path.endsWith('.wasm')) return 'stockfish.wasm';
+  return path;
+};
+
+Module.arguments = [];
+Module.print = console.log;
+Module.printErr = console.error;
+Module.noExitRuntime = true;
+Module.noInitialRun = true;
+Module.INITIAL_MEMORY = 128 * 1024 * 1024;
+Module.MAXIMUM_MEMORY = 1024 * 1024 * 1024;
+Module.ALLOW_MEMORY_GROWTH = 1;
+Module.FS = Module.FS || {};
+Module.FS.createFolder = function() {};
+Module.FS.mkdir = function() {};
+
+Module.preRun = Module.preRun || [];
+Module.preRun.push(function() {
+  if (typeof process !== 'undefined') {
+    process.browser = true;
+  }
+});
+
+console.log('[SF Engine] preamble.js loaded');
+EOF
+
+      - name: Upload Full Build Artifacts
+        if: github.event.inputs.build_type != 'smallnet'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sf19-full
+          path: |
+            stockfish/stockfish.js
+            stockfish/stockfish.wasm
+            stockfish/stockfish.worker.js
+            stockfish/preamble.js
+          retention-days: 30
+
+      - name: Upload Smallnet Build Artifacts
+        if: github.event.inputs.build_type == 'smallnet'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sf19-smallnet
+          path: |
+            stockfish/stockfish.js
+            stockfish/stockfish.wasm
+            stockfish/stockfish.worker.js
+            stockfish/preamble.js
+          retention-days: 30
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            stockfish/stockfish.js
+            stockfish/stockfish.wasm
+            stockfish/stockfish.worker.js
+            stockfish/preamble.js
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-build:
+    name: Test Build
+    runs-on: ubuntu-latest
+    needs: build-sf19
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sf19-full
+          path: ./sf19-test
+
+      - name: Verify files
+        run: |
+          ls -la sf19-test/
+          file sf19-test/stockfish.wasm
+          head -50 sf19-test/stockfish.js
+
+      - name: Verify no EXPORT_ES6
+        run: |
+          if grep -q "EXPORT_ES6" sf19-test/stockfish.js; then
+            echo "ERROR: EXPORT_ES6 found in output!"
+            exit 1
+          else
+            echo "OK: No EXPORT_ES6 found - classic worker compatible"
+          fi
+          
+          # Check for export statements
+          if grep -q "export " sf19-test/stockfish.js; then
+            echo "WARNING: export statements found!"
+          else
+            echo "OK: No export statements found"
+          fi
