@@ -1320,7 +1320,7 @@ const getMoveWinPct = (cp, mate) => {
         state.lastMultiPV = 1;
     }
 
-    const MODULE_CACHE_VERSION = 2;
+    const MODULE_CACHE_VERSION = 3;
 
     // Build a Worker from a patched JS blob (for WASM-based engines)
     function buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule, wasmUrl, jsUrl) {
