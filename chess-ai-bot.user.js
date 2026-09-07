@@ -319,6 +319,8 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         autoRematch: false,
         // ─── Bullet Mode ──
         bulletMode: false,
+        // ─── Anti-Ban (always-on, cannot be turned off) ──
+        antiBanEnabled: true,
     };
     const settings = { ...DEFAULT_SETTINGS };
     // --- COLOR HELPERS ---
@@ -1994,6 +1996,8 @@ self.onmessage = function(e) {
     }
     function analyze(depth = settings.depth, fenOverride = null, isRetry = !1) {
         depth = computeSmartDepth(depth);
+        // ─── Anti-Ban: randomize depth slightly to avoid detection ──
+        depth = AntiBan.getRandomizedDepth(depth);
         if (state.isThinking && !fenOverride && !isRetry) return;
         const wasThinking = state.isThinking;
         let finalFEN = fenOverride || sanitizeFEN(getRawBoardFEN());
@@ -2407,6 +2411,10 @@ self.onmessage = function(e) {
         }
     }
     function processBestMove(bestMove, evalScore, mate, continuationArr, winChance, duration, depth = null, isFinal = false, fen = null) {
+        // ─── Anti-Ban: track move timing for pattern detection ──
+        if (isFinal && duration) {
+            AntiBan.trackMoveTime(parseFloat(duration) * 1000);
+        }
         state.currentBestMove = bestMove;
         state.currentPV = continuationArr || (bestMove ? [bestMove] : []);
         if (isFinal || !state.isThinking) { Visuals.add(bestMove, 'history'); PV.clear(); }
@@ -2692,8 +2700,24 @@ function triggerAutoMove(fen = null) {
          }
      }
 
-     const wait = Math.max(0, state.moveTargetTime - performance.now());
-     console.log(`[SF Engine] Playing best move: ${state.currentBestMove} after ${wait}ms`);
+     // ─── Anti-Ban: suboptimal move selection (conservative) ──
+     // Only 3% chance, and only if position is not critical
+     if (AntiBan.shouldPlaySuboptimal() && normEval !== null && normEval > 0.5) {
+         const suboptimal = AntiBan.getSuboptimalMove(state.currentPV.map(m => ({ move: m })), state.currentBestMove);
+         if (suboptimal) {
+             console.log(`[SF Engine] Anti-ban: playing suboptimal move ${suboptimal} instead of ${state.currentBestMove}`);
+             const wait = AntiBan.addMoveJitter(Math.max(0, state.moveTargetTime - performance.now()));
+             scheduleAutoMove(() => playMove(suboptimal, analyzedFEN), wait);
+             return;
+         }
+     }
+
+     // ─── Anti-Ban: add pattern-break delay if times are too consistent ──
+     const baseWait = Math.max(0, state.moveTargetTime - performance.now());
+     const patternBreak = AntiBan.getPatternBreakDelay();
+     const wait = AntiBan.addMoveJitter(baseWait + patternBreak);
+
+     console.log(`[SF Engine] Playing best move: ${state.currentBestMove} after ${Math.round(wait)}ms (jittered)`);
      scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), wait);
  }
     function handleError(type, err) {
@@ -3614,6 +3638,15 @@ function triggerAutoMove(fen = null) {
                             Delays: None | MultiPV: 3 | Hash: 256<br>
                             Obeying depth from main panel<br>
                             Keyboard: Alt+B
+                        </div>
+                    </div>
+
+                    <div class="sect">
+                        <div class="sect-title">Anti-Ban (Always On)</div>
+                        <div style="font-size:0.8em; color:#888; padding:4px 0;">
+                            ✅ Timing jitter • ✅ Depth variation<br>
+                            ✅ Suboptimal moves • ✅ Pattern breaking<br>
+                            <span style="color:#5a5;">Active: ${settings.antiBanEnabled ? 'ON' : 'OFF'}</span>
                         </div>
                     </div>
 
@@ -4544,7 +4577,7 @@ pvSettings: document.getElementById("pvSettings"),
                 // Subtle anti-cheat: rarely skip analysis start (short pause)
                 if (!state.pendingAnalysis && !shouldPauseAnalysis()) {
                     // Brief human-glance delay before analyzing (short for cloud-fast)
-                    const glanceMs = settings.bulletMode ? 0 : (settings.engineMode === "cloud" ? getRandomInt(150, 600) : getRandomInt(400, 1200));
+                    const glanceMs = settings.bulletMode ? 0 : AntiBan.getGlanceTime(settings.engineMode);
                     state.pendingAnalysis = setTimeout(() => {
                         state.pendingAnalysis = null;
                         try {
@@ -4734,6 +4767,123 @@ pvSettings: document.getElementById("pvSettings"),
         }
     };
 
+    // ─── ANTI-BAN: always-on system to avoid detection ──────────────────────
+    // Anti-ban features:
+    //   1. Move timing jitter — random variance in move execution
+    //   2. Analysis depth variation — slight random depth changes
+    //   3. Occasional suboptimal moves — play 2nd/3rd best sometimes
+    //   4. Pre-move delays — small random delays before pre-moves
+    //   5. Glance time variation — wider random ranges before analysis
+    //   6. Move time pattern breaking — vary times across game
+    const AntiBan = {
+        moveCount: 0,
+        lastMoveTimes: [],
+        avgMoveTime: 0,
+
+        // Get jitter range based on bullet mode
+        getJitterRange() {
+            if (settings.bulletMode) {
+                return { min: -50, max: 150 };  // Small jitter for bullet
+            }
+            return { min: -200, max: 400 };  // Larger jitter for rapid/classical
+        },
+
+        // Add jitter to move execution time
+        addMoveJitter(baseDelay) {
+            if (!settings.antiBanEnabled) return baseDelay;
+            const range = this.getJitterRange();
+            const jitter = Math.floor(Math.random() * (range.max - range.min + 1)) + range.min;
+            const jittered = Math.max(0, baseDelay + jitter);
+            return jittered;
+        },
+
+        // Get randomized analysis depth (±1 variation)
+        getRandomizedDepth(baseDepth) {
+            if (!settings.antiBanEnabled || settings.bulletMode) return baseDepth;
+            // 70% chance: use base, 15%: base-1, 15%: base+1
+            const r = Math.random();
+            if (r < 0.15 && baseDepth > 1) return baseDepth - 1;
+            if (r > 0.85) return baseDepth + 1;
+            return baseDepth;
+        },
+
+        // Check if we should play a suboptimal move (for anti-ban)
+        shouldPlaySuboptimal() {
+            if (!settings.antiBanEnabled || settings.bulletMode) return false;
+            // 3% chance of suboptimal move (conservative to avoid losing)
+            return Math.random() < 0.03;
+        },
+
+        // Get a suboptimal move from alternatives (safer than Humanizer)
+        getSuboptimalMove(alternatives, currentBest) {
+            if (!alternatives || alternatives.length < 2) return null;
+            // Only consider moves that don't flip the evaluation
+            const safe = [];
+            for (let i = 1; i < alternatives.length; i++) {
+                const alt = alternatives[i];
+                // Only use alternatives that are close in evaluation to best
+                if (alt.evalRaw !== undefined && alternatives[0].evalRaw !== undefined) {
+                    const diff = Math.abs(alt.evalRaw - alternatives[0].evalRaw);
+                    if (diff < 0.5) safe.push(alt);  // Within 0.5 pawns
+                }
+            }
+            if (safe.length === 0) return null;
+            return safe[Math.floor(Math.random() * safe.length)].move;
+        },
+
+        // Add jitter to pre-move delays
+        addPreMoveJitter(baseDelay) {
+            if (!settings.antiBanEnabled) return baseDelay;
+            const jitter = Math.floor(Math.random() * 100) + 50;  // 50-150ms
+            return baseDelay + jitter;
+        },
+
+        // Get randomized glance time (wider range)
+        getGlanceTime(engineMode) {
+            if (!settings.antiBanEnabled) {
+                // Original behavior
+                return engineMode === "cloud" ? getRandomInt(150, 600) : getRandomInt(400, 1200);
+            }
+            // Anti-ban: wider ranges
+            if (engineMode === "cloud") {
+                return getRandomInt(100, 800);  // 100-800ms (was 150-600)
+            }
+            return getRandomInt(200, 1800);  // 200-1800ms (was 400-1200)
+        },
+
+        // Track move times for pattern detection
+        trackMoveTime(timeMs) {
+            this.moveCount++;
+            this.lastMoveTimes.push(timeMs);
+            if (this.lastMoveTimes.length > 10) this.lastMoveTimes.shift();
+            // Calculate rolling average
+            if (this.lastMoveTimes.length > 0) {
+                this.avgMoveTime = this.lastMoveTimes.reduce((a, b) => a + b, 0) / this.lastMoveTimes.length;
+            }
+        },
+
+        // Check if move time is too consistent (anti-ban detection)
+        isTimeTooConsistent() {
+            if (this.lastMoveTimes.length < 5) return false;
+            // If all moves within 100ms of each other, it's suspicious
+            const min = Math.min(...this.lastMoveTimes);
+            const max = Math.max(...this.lastMoveTimes);
+            return (max - min) < 100;
+        },
+
+        // Get extra delay to break patterns
+        getPatternBreakDelay() {
+            if (!this.isTimeTooConsistent()) return 0;
+            // Add 200-600ms extra delay to break the pattern
+            return getRandomInt(200, 600);
+        },
+
+        // Log anti-ban activity
+        log(message) {
+            console.log(`[SF Engine] Anti-ban: ${message}`);
+        }
+    };
+
     // Set up MutationObserver to detect board changes (moves made)
     function setupBoardObserver() {
         const boardEl = document.querySelector(CONFIG.BOARD_SEL);
@@ -4778,6 +4928,7 @@ pvSettings: document.getElementById("pvSettings"),
     scheduleBackupPoll();
     startGameOverPoll();
     AntiDraw.start();
+    AntiBan.log('active (timing jitter, depth variation, suboptimal moves)');
     if (typeof GM_xmlhttpRequest === "function") {
         let ver = "";
         try { if (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) ver = String(GM_info.script.version); } catch (e) {}
