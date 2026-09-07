@@ -44,46 +44,70 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y python3 make git
 
+      - name: Copy glue.cpp and initModule.js to Stockfish src
+        run: |
+          cp chess-ai-bot/src/glue.cpp stockfish/src/
+          cp chess-ai-bot/src/initModule.js stockfish/src/
+
       - name: Build SF19 (Full NNUE) - Classic Worker
         if: github.event.inputs.build_type != 'smallnet'
         run: |
           set -e
           cd stockfish
           
-          # Find all source files
-          SRC_FILES=$(find src -name "*.cpp" | tr '\n' ' ')
-          echo "Compiling $(echo $SRC_FILES | wc -w) source files..."
+          # Find all source files (excluding platform-specific and nnue_embed)
+          SRC_FILES=$(find src -name "*.cpp" \
+            ! -path "src/universal/entry_*" \
+            ! -name "nnue_embed.cpp" \
+            ! -name "pyffish.cpp" \
+            ! -name "ffishjs.cpp" \
+            | tr '\n' ' ')
           
-          # Common emcc flags for classic worker (NO EXPORT_ES6)
-          EMCC_FLAGS=(
-            -O3 -DNDEBUG -flto
-            -msimd128 -msse -msse2 -mssse3 -msse4.1
-            -DNNUE_EMBEDDING_OFF=0
-            -DUSE_POPCNT -DNO_PREFETCH -DIS_64BIT -DNO_TABLEBASES -DNO_SYZYGY
-            -s MODULARIZE=1
-            -s EXPORT_NAME=Stockfish
-            -s ENVIRONMENT=web,worker
-            -s USE_PTHREADS=0
-            -s EXIT_RUNTIME=0
-            -s ALLOW_MEMORY_GROWTH=1
-            -s INITIAL_MEMORY=128MB
-            -s MAXIMUM_MEMORY=1024MB
-            -s STACK_SIZE=5MB
-            -s FILESYSTEM=0
-            -s STRICT=1
-            -s ASSERTIONS=0
-            --closure=1
-            -s EXPORTED_FUNCTIONS='["_malloc","_free","_main"]'
-            -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","stringToUTF8","UTF8ToString","HEAPU8"]'
-            --pre-js ../chess-ai-bot/preamble.js
-            --extern-pre-js ../chess-ai-bot/extern-pre.js
-            --extern-post-js ../chess-ai-bot/extern-post.js
-            -o stockfish.js
-          )
+          echo "Found $(echo $SRC_FILES | wc -w) source files"
           
-          em++ "${EMCC_FLAGS[@]}" $SRC_FILES 2>&1 | tee build.log
+          # Build directory
+          mkdir -p build
+          cd build
           
-          # Verify
+          # CXX_FLAGS for compilation (each .cpp -> .o)
+          CXX_FLAGS="-O3 -DNDEBUG --closure=1 -Isrc -pthread -msimd128 -mavx -flto -fno-exceptions \
+            -DUSE_POPCNT -DUSE_SSE2 -DUSE_SSSE3 -DUSE_SSE41 -DNO_PREFETCH -DUSE_SLOPPY_ATOMICS \
+            -DNNUE_EMBEDDING_OFF=0 -DNO_TABLEBASES \
+            -DSTOCKFISH_WEB_SF_19"
+          
+          # LD_FLAGS for linking (.o files -> .js + .wasm)
+          # Classic worker: MODULARIZE=1, EXPORT_NAME=Stockfish, NO EXPORT_ES6, USE_PTHREADS=0
+          LD_FLAGS="-sENVIRONMENT=web,worker \
+            --pre-js=../src/initModule.js \
+            -sMODULARIZE=1 -sEXPORT_NAME=Stockfish \
+            -sEXIT_RUNTIME=1 \
+            -sEXPORTED_FUNCTIONS='[\"_malloc\",\"_free\",\"_main\",\"_uci\",\"_getRecommendedNnue\",\"_setNnueBuffer\"]' \
+            -sEXPORTED_RUNTIME_METHODS='[\"stringToUTF8\",\"UTF8ToString\",\"HEAPU8\",\"lengthBytesUTF8\",\"_malloc\",\"_free\"]' \
+            -sINCOMING_MODULE_JS_API='[\"locateFile\",\"print\",\"printErr\",\"wasmMemory\",\"buffer\",\"instantiateWasm\",\"mainScriptUrlOrBlob\",\"onExit\"]' \
+            -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=3MB -sSTRICT=1 \
+            -sUSE_PTHREADS=0 -sPROXY_TO_PTHREAD=0 \
+            -sALLOW_BLOCKING_ON_MAIN_THREAD=0 -Wno-pthreads-mem-growth \
+            --closure=1"
+          
+          echo "=== Compiling source files ==="
+          for src in $SRC_FILES; do
+            obj="${src%.cpp}.o"
+            echo "Compiling $src -> $obj"
+            em++ $CXX_FLAGS -MMD -MP -c "../$src" -o "../$obj"
+          done
+          
+          # Compile glue.cpp
+          echo "Compiling glue.cpp -> glue.o"
+          em++ $CXX_FLAGS -MMD -MP -c "../src/glue.cpp" -o "../src/glue.o"
+          
+          # Collect all object files
+          OBJS=$(find ../src -name "*.o" | tr '\n' ' ')
+          echo "=== Linking $(echo $OBJS | wc -w) object files ==="
+          
+          # Link everything into stockfish.js + stockfish.wasm
+          em++ $CXX_FLAGS $LD_FLAGS $OBJS -o stockfish.js
+          
+          # Verify output
           if grep -q "EXPORT_ES6" stockfish.js; then
             echo "ERROR: EXPORT_ES6 found in output!"
             exit 1
@@ -101,40 +125,59 @@ jobs:
           set -e
           cd stockfish
           
-          # Find all source files
-          SRC_FILES=$(find src -name "*.cpp" | tr '\n' ' ')
-          echo "Compiling $(echo $SRC_FILES | wc -w) source files..."
+          # Find all source files (excluding platform-specific and nnue_embed)
+          SRC_FILES=$(find src -name "*.cpp" \
+            ! -path "src/universal/entry_*" \
+            ! -name "nnue_embed.cpp" \
+            ! -name "pyffish.cpp" \
+            ! -name "ffishjs.cpp" \
+            | tr '\n' ' ')
           
-          # Common emcc flags for classic worker (NO EXPORT_ES6) - smallnet
-          EMCC_FLAGS=(
-            -O3 -DNDEBUG -flto
-            -msimd128 -msse -msse2 -mssse3 -msse4.1
-            -DNNUE_EMBEDDING_OFF=1
-            -DUSE_POPCNT -DNO_PREFETCH -DIS_64BIT -DNO_TABLEBASES -DNO_SYZYGY
-            -s MODULARIZE=1
-            -s EXPORT_NAME=Stockfish
-            -s ENVIRONMENT=web,worker
-            -s USE_PTHREADS=0
-            -s EXIT_RUNTIME=0
-            -s ALLOW_MEMORY_GROWTH=1
-            -s INITIAL_MEMORY=128MB
-            -s MAXIMUM_MEMORY=1024MB
-            -s STACK_SIZE=5MB
-            -s FILESYSTEM=0
-            -s STRICT=1
-            -s ASSERTIONS=0
-            --closure=1
-            -s EXPORTED_FUNCTIONS='["_malloc","_free","_main"]'
-            -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","stringToUTF8","UTF8ToString","HEAPU8"]'
-            --pre-js ../chess-ai-bot/preamble.js
-            --extern-pre-js ../chess-ai-bot/extern-pre.js
-            --extern-post-js ../chess-ai-bot/extern-post.js
-            -o stockfish.js
-          )
+          echo "Found $(echo $SRC_FILES | wc -w) source files"
           
-          em++ "${EMCC_FLAGS[@]}" $SRC_FILES 2>&1 | tee build.log
+          # Build directory
+          mkdir -p build
+          cd build
           
-          # Verify
+          # CXX_FLAGS for compilation (each .cpp -> .o) - smallnet has NNUE_EMBEDDING_OFF=1
+          CXX_FLAGS="-O3 -DNDEBUG --closure=1 -Isrc -pthread -msimd128 -mavx -flto -fno-exceptions \
+            -DUSE_POPCNT -DUSE_SSE2 -DUSE_SSSE3 -DUSE_SSE41 -DNO_PREFETCH -DUSE_SLOPPY_ATOMICS \
+            -DNNUE_EMBEDDING_OFF=1 -DNO_TABLEBASES \
+            -DSTOCKFISH_WEB_SF_19_SMALLNET"
+          
+          # LD_FLAGS for linking (.o files -> .js + .wasm)
+          # Classic worker: MODULARIZE=1, EXPORT_NAME=Stockfish, NO EXPORT_ES6, USE_PTHREADS=0
+          LD_FLAGS="-sENVIRONMENT=web,worker \
+            --pre-js=../src/initModule.js \
+            -sMODULARIZE=1 -sEXPORT_NAME=Stockfish \
+            -sEXIT_RUNTIME=1 \
+            -sEXPORTED_FUNCTIONS='[\"_malloc\",\"_free\",\"_main\",\"_uci\",\"_getRecommendedNnue\",\"_setNnueBuffer\"]' \
+            -sEXPORTED_RUNTIME_METHODS='[\"stringToUTF8\",\"UTF8ToString\",\"HEAPU8\",\"lengthBytesUTF8\",\"_malloc\",\"_free\"]' \
+            -sINCOMING_MODULE_JS_API='[\"locateFile\",\"print\",\"printErr\",\"wasmMemory\",\"buffer\",\"instantiateWasm\",\"mainScriptUrlOrBlob\",\"onExit\"]' \
+            -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=3MB -sSTRICT=1 \
+            -sUSE_PTHREADS=0 -sPROXY_TO_PTHREAD=0 \
+            -sALLOW_BLOCKING_ON_MAIN_THREAD=0 -Wno-pthreads-mem-growth \
+            --closure=1"
+          
+          echo "=== Compiling source files ==="
+          for src in $SRC_FILES; do
+            obj="${src%.cpp}.o"
+            echo "Compiling $src -> $obj"
+            em++ $CXX_FLAGS -MMD -MP -c "../$src" -o "../$obj"
+          done
+          
+          # Compile glue.cpp
+          echo "Compiling glue.cpp -> glue.o"
+          em++ $CXX_FLAGS -MMD -MP -c "../src/glue.cpp" -o "../src/glue.o"
+          
+          # Collect all object files
+          OBJS=$(find ../src -name "*.o" | tr '\n' ' ')
+          echo "=== Linking $(echo $OBJS | wc -w) object files ==="
+          
+          # Link everything into stockfish.js + stockfish.wasm
+          em++ $CXX_FLAGS $LD_FLAGS $OBJS -o stockfish.js
+          
+          # Verify output
           if grep -q "EXPORT_ES6" stockfish.js; then
             echo "ERROR: EXPORT_ES6 found in output!"
             exit 1
@@ -148,10 +191,10 @@ jobs:
 
       - name: Prepare artifact files
         run: |
-          cd stockfish
+          cd stockfish/build
           # Copy worker wrapper and preamble from our repo
-          cp ../chess-ai-bot/stockfish.worker.js .
-          cp ../chess-ai-bot/preamble.js .
+          cp ../../chess-ai-bot/stockfish.worker.js .
+          cp ../../chess-ai-bot/preamble.js .
 
       - name: Upload Full Build Artifacts
         if: github.event.inputs.build_type != 'smallnet'
@@ -159,10 +202,10 @@ jobs:
         with:
           name: sf19-full
           path: |
-            stockfish/stockfish.js
-            stockfish/stockfish.wasm
-            stockfish/stockfish.worker.js
-            stockfish/preamble.js
+            stockfish/build/stockfish.js
+            stockfish/build/stockfish.wasm
+            stockfish/build/stockfish.worker.js
+            stockfish/build/preamble.js
           retention-days: 30
 
       - name: Upload Smallnet Build Artifacts
@@ -171,10 +214,10 @@ jobs:
         with:
           name: sf19-smallnet
           path: |
-            stockfish/stockfish.js
-            stockfish/stockfish.wasm
-            stockfish/stockfish.worker.js
-            stockfish/preamble.js
+            stockfish/build/stockfish.js
+            stockfish/build/stockfish.wasm
+            stockfish/build/stockfish.worker.js
+            stockfish/build/preamble.js
           retention-days: 30
 
       - name: Create Release
@@ -182,10 +225,10 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            stockfish/stockfish.js
-            stockfish/stockfish.wasm
-            stockfish/stockfish.worker.js
-            stockfish/preamble.js
+            stockfish/build/stockfish.js
+            stockfish/build/stockfish.wasm
+            stockfish/build/stockfish.worker.js
+            stockfish/build/preamble.js
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
