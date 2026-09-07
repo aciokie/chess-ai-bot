@@ -1878,7 +1878,7 @@ self.onmessage = function(e) {
                 // Optimized: download JS and WASM in PARALLEL for faster loading.
                 const jsKey      = m.cacheKey + "_js";
                 const wasmKey    = m.cacheKey + "_wasm";
-                const patchedKey = m.cacheKey + "_patched";
+const patchedKey = m.cacheKey + "_patched_v" + MODULE_CACHE_VERSION;
                 let fromPatchedCache = false;
 
                 const launch = (jsCode, wasmBytes, compiledModule) => {
