@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.9.0
+// @version          11.9.1
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -18,13 +18,14 @@
 // @connect       chess-api.com
 // @connect       stockfish.online
 // @connect       unpkg.com
-// @connect       *
+// @connect       lichess-org
 // @grant         GM_getResourceText
 // @grant         GM_getValue
 // @grant         GM_setValue
 // @grant         GM_xmlhttpRequest
 // @grant         GM_info
-// @resource      stockfish.js https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.js
+// @resource      stockfish19.js https://unpkg.com/@lichess-org/stockfish-web@0.5.0/sf_19.js
+// @resource      stockfish19.wasm https://unpkg.com/@lichess-org/stockfish-web@0.5.0/sf_19.wasm
 // @run-at        document-idle
 // ==/UserScript==
 (function () {
@@ -1406,15 +1407,37 @@ self.onmessage = function(e) {
         const blob = new Blob([bootstrapCode], { type: "application/javascript" });
         const blobUrl = URL.createObjectURL(blob);
         let worker;
+        let workerCreated = false;
+        // Try blob URL first
         try {
             worker = new Worker(blobUrl);
+            workerCreated = true;
         } catch (e) {
-            console.warn(`[SF Engine] blob URL Worker failed (${e.message}), trying data URI fallback...`);
-            // Fallback: use data URI (some CSPs block blob URLs)
-            const dataUri = 'data:application/javascript;base64,' + btoa(unescape(encodeURIComponent(bootstrapCode)));
-            worker = new Worker(dataUri);
+            console.warn(`[SF Engine] blob URL Worker failed: ${e.message}, trying data URI fallback...`);
         }
-        URL.revokeObjectURL(blobUrl);  // Clean up immediately
+        // Fallback: data URI (some CSPs block blob URLs)
+        if (!workerCreated) {
+            try {
+                const dataUri = 'data:application/javascript;base64,' + btoa(bootstrapCode);
+                worker = new Worker(dataUri);
+                workerCreated = true;
+                console.log(`[SF Engine] Worker created via data URI fallback`);
+            } catch (e2) {
+                console.error(`[SF Engine] data URI Worker also failed: ${e2.message}`);
+            }
+        }
+        // Last resort: inline function (no external URL)
+        if (!workerCreated) {
+            try {
+                worker = new Worker('data:application/javascript,' + encodeURIComponent(bootstrapCode));
+                workerCreated = true;
+                console.log(`[SF Engine] Worker created via inline data URI`);
+            } catch (e3) {
+                console.error(`[SF Engine] All Worker creation methods failed`);
+                throw e3;
+            }
+        }
+        URL.revokeObjectURL(blobUrl);
         if (moduleMode) {
             worker.postMessage({ __type: "launch-module", jsCode: jsCode, wasmModule: compiledModule }, [compiledModule]);
         } else {
@@ -1429,12 +1452,30 @@ self.onmessage = function(e) {
         const blob = new Blob([jsCode], { type: "application/javascript" });
         const blobUrl = URL.createObjectURL(blob);
         let worker;
+        let workerCreated = false;
         try {
             worker = new Worker(blobUrl);
+            workerCreated = true;
         } catch (e) {
-            console.warn(`[SF Engine] asm.js blob URL Worker failed, trying data URI...`);
-            const dataUri = 'data:application/javascript;base64,' + btoa(unescape(encodeURIComponent(jsCode)));
-            worker = new Worker(dataUri);
+            console.warn(`[SF Engine] asm.js blob URL Worker failed: ${e.message}, trying data URI...`);
+        }
+        if (!workerCreated) {
+            try {
+                const dataUri = 'data:application/javascript;base64,' + btoa(jsCode);
+                worker = new Worker(dataUri);
+                workerCreated = true;
+            } catch (e2) {
+                console.error(`[SF Engine] asm.js data URI failed: ${e2.message}`);
+            }
+        }
+        if (!workerCreated) {
+            try {
+                worker = new Worker('data:application/javascript,' + encodeURIComponent(jsCode));
+                workerCreated = true;
+            } catch (e3) {
+                console.error(`[SF Engine] asm.js all Worker methods failed`);
+                throw e3;
+            }
         }
         URL.revokeObjectURL(blobUrl);
         return worker;
@@ -1630,30 +1671,58 @@ self.onmessage = function(e) {
     function xhrBinary(url, cb, errCb, onProgress) {
         // Try GM_xmlhttpRequest first (bypasses CORS), then fallback to fetch()
         let tried = false;
+        let gmDone = false;
         const tryFetch = () => {
             if (tried) return;
             tried = true;
-            console.log(`[SF Engine] GM_xmlhttpRequest failed, trying fetch() fallback...`);
-            fetch(url).then(r => {
+            console.log(`[SF Engine] GM_xmlhttpRequest failed/unavailable, trying fetch() fallback...`);
+            fetch(url, { mode: "cors", credentials: "omit" }).then(r => {
                 if (!r.ok) { errCb(new Error(`fetch HTTP ${r.status}`)); return; }
                 return r.arrayBuffer();
             }).then(buf => {
                 if (buf) cb(new Uint8Array(buf));
-            }).catch(e => errCb(new Error("Both GM_xmlhttpRequest and fetch failed: " + e.message)));
+            }).catch(e => {
+                console.error(`[SF Engine] fetch fallback failed:`, e);
+                errCb(new Error("Both GM_xmlhttpRequest and fetch failed: " + e.message));
+            });
         };
         try {
             GM_xmlhttpRequest({
                 method: "GET", url, responseType: "arraybuffer", timeout: 180000,
+                anonymous: true, fetch: true,  // Force fetch mode, no cookies
                 onload: (r) => {
-                    if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                    cb(new Uint8Array(r.response));
+                    gmDone = true;
+                    if (r.status >= 400) { errCb(new Error(`GM_xmlhttpRequest HTTP ${r.status}`)); return; }
+                    const resp = r.response;
+                    if (!resp || !(resp instanceof ArrayBuffer) || resp.byteLength === 0) {
+                        console.warn(`[SF Engine] GM_xmlhttpRequest returned empty response, trying fetch...`);
+                        tryFetch();
+                        return;
+                    }
+                    console.log(`[SF Engine] GM_xmlhttpRequest success: ${resp.byteLength} bytes`);
+                    cb(new Uint8Array(resp));
                 },
-                onerror: (e) => { console.warn(`[SF Engine] GM_xmlhttpRequest error, trying fetch...`); tryFetch(); },
-                ontimeout: () => { console.warn(`[SF Engine] GM_xmlhttpRequest timeout (180s), trying fetch...`); tryFetch(); },
+                onerror: (e) => {
+                    gmDone = true;
+                    console.warn(`[SF Engine] GM_xmlhttpRequest error:`, e);
+                    tryFetch();
+                },
+                ontimeout: () => {
+                    gmDone = true;
+                    console.warn(`[SF Engine] GM_xmlhttpRequest timeout (180s), trying fetch...`);
+                    tryFetch();
+                },
                 onprogress: (e) => { if (onProgress && e.lengthComputable) onProgress(e.loaded, e.total); },
             });
+            // Safety: if GM_xmlhttpRequest doesn't call any callback within 10s, assume it's broken
+            setTimeout(() => {
+                if (!gmDone && !tried) {
+                    console.warn(`[SF Engine] GM_xmlhttpRequest silent failure (10s no callback), trying fetch...`);
+                    tryFetch();
+                }
+            }, 10000);
         } catch (e) {
-            console.warn(`[SF Engine] GM_xmlhttpRequest exception, trying fetch...`, e);
+            console.warn(`[SF Engine] GM_xmlhttpRequest exception:`, e);
             tryFetch();
         }
     }
