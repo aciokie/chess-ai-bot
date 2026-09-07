@@ -47,57 +47,111 @@ jobs:
       - name: Build SF19 (Full NNUE) - Classic Worker
         if: github.event.inputs.build_type != 'smallnet'
         run: |
-          cd stockfish/src
-          make clean
+          set -e
+          cd stockfish
           
-          # Build using official Makefile with classic worker flags (no EXPORT_ES6)
-          # The official Stockfish Makefile doesn't have wasm support - we'll see if it works
-          make -j$(nproc) ARCH=wasm COMP=emscripten \
-            CXX=em++ \
-            COMPCXX=em++ \
-            EXE=stockfish.js \
-            CXXFLAGS="-O3 -DNDEBUG -flto -msimd128 -msse -msse2 -mssse3 -msse4.1 -DNNUE_EMBEDDING_OFF=0 -DUSE_POPCNT -DNO_PREFETCH -DIS_64BIT -DNO_TABLEBASES -DNO_SYZYGY" \
-            LDFLAGS="-s MODULARIZE=1 -s EXPORT_NAME=Stockfish -s ENVIRONMENT=web,worker -s USE_PTHREADS=0 -s EXIT_RUNTIME=0 -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=128MB -s MAXIMUM_MEMORY=1024MB -s STACK_SIZE=5MB -s FILESYSTEM=0 -s STRICT=1 -s ASSERTIONS=0 -DNDEBUG -O3 --closure=1 -s EXPORTED_FUNCTIONS='[\"_malloc\",\"_free\",\"_main\"]' -s EXPORTED_RUNTIME_METHODS='[\"ccall\",\"cwrap\",\"stringToUTF8\",\"UTF8ToString\",\"HEAPU8\"]' -s INITIAL_MEMORY=128MB -s MAXIMUM_MEMORY=1024MB -s STACK_SIZE=5MB -s FILESYSTEM=0 -s STRICT=1 --pre-js ../../chess-ai-bot/preamble.js --extern-pre-js ../../chess-ai-bot/extern-pre.js --extern-post-js ../../chess-ai-bot/extern-post.js" \
-            build 2>&1 | tee build.log
+          # Find all source files
+          SRC_FILES=$(find src -name "*.cpp" | tr '\n' ' ')
+          echo "Compiling $(echo $SRC_FILES | wc -w) source files..."
           
-          # Verify no EXPORT_ES6 in output
+          # Common emcc flags for classic worker (NO EXPORT_ES6)
+          EMCC_FLAGS=(
+            -O3 -DNDEBUG -flto
+            -msimd128 -msse -msse2 -mssse3 -msse4.1
+            -DNNUE_EMBEDDING_OFF=0
+            -DUSE_POPCNT -DNO_PREFETCH -DIS_64BIT -DNO_TABLEBASES -DNO_SYZYGY
+            -s MODULARIZE=1
+            -s EXPORT_NAME=Stockfish
+            -s ENVIRONMENT=web,worker
+            -s USE_PTHREADS=0
+            -s EXIT_RUNTIME=0
+            -s ALLOW_MEMORY_GROWTH=1
+            -s INITIAL_MEMORY=128MB
+            -s MAXIMUM_MEMORY=1024MB
+            -s STACK_SIZE=5MB
+            -s FILESYSTEM=0
+            -s STRICT=1
+            -s ASSERTIONS=0
+            --closure=1
+            -s EXPORTED_FUNCTIONS='["_malloc","_free","_main"]'
+            -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","stringToUTF8","UTF8ToString","HEAPU8"]'
+            --pre-js ../chess-ai-bot/preamble.js
+            --extern-pre-js ../chess-ai-bot/extern-pre.js
+            --extern-post-js ../chess-ai-bot/extern-post.js
+            -o stockfish.js
+          )
+          
+          em++ "${EMCC_FLAGS[@]}" $SRC_FILES 2>&1 | tee build.log
+          
+          # Verify
           if grep -q "EXPORT_ES6" stockfish.js; then
             echo "ERROR: EXPORT_ES6 found in output!"
             exit 1
           fi
+          if [ ! -f stockfish.wasm ]; then
+            echo "ERROR: stockfish.wasm not generated!"
+            exit 1
+          fi
           echo "SUCCESS: No EXPORT_ES6 found - classic worker compatible"
+          ls -lh stockfish.js stockfish.wasm
 
       - name: Build SF19 (Smallnet) - Classic Worker
         if: github.event.inputs.build_type == 'smallnet'
         run: |
-          cd stockfish/src
-          make clean
+          set -e
+          cd stockfish
           
-          # Build with smallnet (NNUE_EMBEDDING_OFF=1 for smaller binary)
-          make -j$(nproc) ARCH=wasm COMP=emscripten \
-            CXX=em++ \
-            COMPCXX=em++ \
-            EXE=stockfish.js \
-            CXXFLAGS="-O3 -DNDEBUG -flto -msimd128 -msse -msse2 -mssse3 -msse4.1 -DNNUE_EMBEDDING_OFF=1 -DUSE_POPCNT -DNO_PREFETCH -DIS_64BIT -DNO_TABLEBASES -DNO_SYZYGY" \
-            LDFLAGS="-s MODULARIZE=1 -s EXPORT_NAME=Stockfish -s ENVIRONMENT=web,worker -s USE_PTHREADS=0 -s EXIT_RUNTIME=0 -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=128MB -s MAXIMUM_MEMORY=1024MB -s STACK_SIZE=5MB -s FILESYSTEM=0 -s STRICT=1 -s ASSERTIONS=0 -DNDEBUG -O3 --closure=1 -s EXPORTED_FUNCTIONS='[\"_malloc\",\"_free\",\"_main\"]' -s EXPORTED_RUNTIME_METHODS='[\"ccall\",\"cwrap\",\"stringToUTF8\",\"UTF8ToString\",\"HEAPU8\"]' -s INITIAL_MEMORY=128MB -s MAXIMUM_MEMORY=1024MB -s STACK_SIZE=5MB -s FILESYSTEM=0 -s STRICT=1 --pre-js ../../chess-ai-bot/preamble.js --extern-pre-js ../../chess-ai-bot/extern-pre.js --extern-post-js ../../chess-ai-bot/extern-post.js" \
-            build 2>&1 | tee build.log
+          # Find all source files
+          SRC_FILES=$(find src -name "*.cpp" | tr '\n' ' ')
+          echo "Compiling $(echo $SRC_FILES | wc -w) source files..."
           
-          # Verify no EXPORT_ES6 in output
+          # Common emcc flags for classic worker (NO EXPORT_ES6) - smallnet
+          EMCC_FLAGS=(
+            -O3 -DNDEBUG -flto
+            -msimd128 -msse -msse2 -mssse3 -msse4.1
+            -DNNUE_EMBEDDING_OFF=1
+            -DUSE_POPCNT -DNO_PREFETCH -DIS_64BIT -DNO_TABLEBASES -DNO_SYZYGY
+            -s MODULARIZE=1
+            -s EXPORT_NAME=Stockfish
+            -s ENVIRONMENT=web,worker
+            -s USE_PTHREADS=0
+            -s EXIT_RUNTIME=0
+            -s ALLOW_MEMORY_GROWTH=1
+            -s INITIAL_MEMORY=128MB
+            -s MAXIMUM_MEMORY=1024MB
+            -s STACK_SIZE=5MB
+            -s FILESYSTEM=0
+            -s STRICT=1
+            -s ASSERTIONS=0
+            --closure=1
+            -s EXPORTED_FUNCTIONS='["_malloc","_free","_main"]'
+            -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","stringToUTF8","UTF8ToString","HEAPU8"]'
+            --pre-js ../chess-ai-bot/preamble.js
+            --extern-pre-js ../chess-ai-bot/extern-pre.js
+            --extern-post-js ../chess-ai-bot/extern-post.js
+            -o stockfish.js
+          )
+          
+          em++ "${EMCC_FLAGS[@]}" $SRC_FILES 2>&1 | tee build.log
+          
+          # Verify
           if grep -q "EXPORT_ES6" stockfish.js; then
             echo "ERROR: EXPORT_ES6 found in output!"
             exit 1
           fi
+          if [ ! -f stockfish.wasm ]; then
+            echo "ERROR: stockfish.wasm not generated!"
+            exit 1
+          fi
           echo "SUCCESS: No EXPORT_ES6 found - classic worker compatible"
+          ls -lh stockfish.js stockfish.wasm
 
       - name: Prepare artifact files
         run: |
-          cd stockfish/src
-          # Copy built files
-          cp stockfish.js stockfish.wasm ../
-          
+          cd stockfish
           # Copy worker wrapper and preamble from our repo
-          cp ../../chess-ai-bot/stockfish.worker.js .
-          cp ../../chess-ai-bot/preamble.js .
+          cp ../chess-ai-bot/stockfish.worker.js .
+          cp ../chess-ai-bot/preamble.js .
 
       - name: Upload Full Build Artifacts
         if: github.event.inputs.build_type != 'smallnet'
