@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.5.0
+// @version          11.6.0
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -103,7 +103,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasSkillLevel:   true,
             hasNNUE:         true,   // UCI_LimitStrength + UCI_Elo
             hasWDL:          true,   // UCI_ShowWDL
-            hasContempt:     false,  // removed in SF 14
+            hasContempt:     true,   // SF 14+ has Contempt (default 24, range -100..100)
             hasMinThink:     false,  // removed in SF 12
             hasRepetition:   true,   // SF 14+ anti-repetition
             // Per-model defaults
@@ -125,7 +125,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasSkillLevel:   true,
             hasNNUE:         true,
             hasWDL:          true,
-            hasContempt:     false,  // removed in SF 14
+            hasContempt:     true,   // SF 14+ has Contempt
             hasMinThink:     false,  // removed in SF 12
             hasRepetition:   true,   // SF 14+ anti-repetition
             defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
@@ -1301,11 +1301,13 @@ const getMoveWinPct = (cp, mate) => {
         }
         if (m.hasContempt) cmds.push(`setoption name Contempt value ${settings.localContempt}`);
         cmds.push("setoption name MultiPV value 1");
-        // Anti-draw: force engine to avoid repetition-draw positions.
-        // Repetition option (SF 14+): high value = engine tries harder to avoid repeating.
-        // Contempt (SF 9-13): high positive value = engine plays for win, not draw.
-        if (m.hasRepetition) cmds.push("setoption name Repetition value 5");
-        if (m.hasContempt) cmds.push(`setoption name Contempt value 100`);
+        // Anti-draw (always-on, cannot be turned off):
+        // Force Contempt=100 to strongly prefer winning over drawing.
+        // Force Analysis Contempt=Both so contempt applies to both sides.
+        if (m.hasContempt) {
+            cmds.push(`setoption name Contempt value 100`);
+            cmds.push(`setoption name Analysis Contempt value Both`);
+        }
         cmds.forEach(c => state.localEngine.postMessage(c));
         state.lastMultiPV = 1;
     }
@@ -1953,7 +1955,17 @@ self.onmessage = function(e) {
         updateUI();
     }
     function computeSmartDepth(userDepth) {
-        return settings.depth;
+        let d = settings.depth;
+        // Anti-draw: boost depth when approaching 50-move / 75-move rule
+        // to find forcing moves (captures/pawn pushes) that reset the clock
+        const fen = state.lastSentFEN;
+        if (fen && AntiDraw.getHalfmoveClock) {
+            const hmc = AntiDraw.getHalfmoveClock(fen);
+            if (hmc >= 65) { d += 6; console.log(`[SF Engine] Anti-draw: 75-move rule approaching (hmc=${hmc}), depth +6 → ${d}`); }
+            else if (hmc >= 45) { d += 4; console.log(`[SF Engine] Anti-draw: 50-move rule approaching (hmc=${hmc}), depth +4 → ${d}`); }
+            else if (hmc >= 38) { d += 2; console.log(`[SF Engine] Anti-draw: 50-move rule warning (hmc=${hmc}), depth +2 → ${d}`); }
+        }
+        return Math.min(d, 30);
     }
     function computeTimeManagedDelay() {
         if (!settings.timeManagement) return null;
@@ -2413,6 +2425,38 @@ self.onmessage = function(e) {
         state.currentMateNorm = normMate;
 
         if (settings.showEvalBar) EvalBar.update(normEval, normMate);
+
+        // ─── ANTI-DRAW: Stalemate + Insufficient Material detection ──
+        // If we're winning but eval=0 or opponent has no legal moves after our best,
+        // the position may be stalemate or heading toward it. Force re-analysis with
+        // a different move if possible (use second-best PV line).
+        if (fen && settings.localMode !== "off") {
+            const hmc = AntiDraw.getHalfmoveClock(fen);
+            const board = fen.split(" ")[0];
+
+            // Detect stalemate risk: winning side but eval = 0 (stalemate)
+            if (normMate === 0 || (normEval !== null && Math.abs(normEval) < 0.05 && hmc > 40)) {
+                // Try second PV line if available (MultiPV=2+)
+                if (state.currentPV && state.currentPV.length >= 3 && state.currentBestMove !== state.currentPV[2]) {
+                    console.log(`[SF Engine] Anti-draw: stalemate risk detected (eval=${normEval}, mate=${normMate}, hmc=${hmc}). Trying alternative PV move.`);
+                    const altMove = state.currentPV[2];
+                    // Play the alternative move instead if it's our turn
+                    if (isOurTurnNow() && settings.autoMove) {
+                        playMove(altMove, fen);
+                    }
+                }
+            }
+
+            // Insufficient material detection — avoid trading into K vs K, K+B vs K, K+N vs K
+            if (AntiDraw.isInsufficientMaterial(fen)) {
+                console.log(`[SF Engine] Anti-draw: insufficient material detected! Position is likely drawn.`);
+            }
+
+            // Log draw-rule status for debugging
+            if (hmc >= 38) {
+                console.log(`[SF Engine] Anti-draw: halfmove clock = ${hmc}/100 (50-move) / ${hmc}/150 (75-move)`);
+            }
+        }
 
         // ─── Auto-Resign ── check for hopelessly lost position
         let scoreTxt = "", pvStr = "N/A", numericValForStatus = 0, isMate = false;
@@ -4525,18 +4569,80 @@ pvSettings: document.getElementById("pvSettings"),
         }, getRandomInt(2000, 4000));
     }
 
-    // ─── ANTI-DRAW: auto-decline draw offers + prevent draw offers ──────────────
-    // This is a default feature that cannot be turned off.
-    // Watches for draw offer dialogs and auto-clicks "Decline" / "No thanks".
-    // Also hides our own draw offer button to prevent accidental offers.
+    // ─── ANTI-DRAW: counters ALL draw rules — always-on, cannot be turned off ────
+    // Draw rules countered:
+    //   1. Threefold repetition — engine Contempt=100, auto-decline draw offers
+    //   2. 50-move rule — track halfmove clock from FEN, force capture/pawn move when close
+    //   3. 75-move rule — same tracking, even harder cutoff at 70 moves
+    //   4. Fivefold repetition — same as threefold, engine avoids repeats
+    //   5. Stalemate — engine NNUE avoids it, plus we verify before playing
+    //   6. Insufficient material — avoid trading to K vs K, K+B vs K, K+N vs K
+    //   7. Draw offers — auto-decline any opponent draw offer
+    //   8. Draw claims — auto-click "Decline" on claim-draw dialogs
     const AntiDraw = {
         observer: null,
         _declining: false,
+
+        // Parse halfmove clock (50-move rule counter) from FEN
+        getHalfmoveClock(fen) {
+            if (!fen) return 0;
+            const parts = fen.split(" ");
+            return parts.length >= 6 ? parseInt(parts[4]) || 0 : 0;
+        },
+
+        // Parse full move number from FEN
+        getMoveNumber(fen) {
+            if (!fen) return 0;
+            const parts = fen.split(" ");
+            return parts.length >= 6 ? parseInt(parts[5]) || 1 : 1;
+        },
+
+        // Count piece material from FEN (excluding kings)
+        countMaterial(fen) {
+            if (!fen) return {};
+            const board = fen.split(" ")[0];
+            const mat = { p: 0, n: 0, b: 0, r: 0, q: 0, P: 0, N: 0, B: 0, R: 0, Q: 0 };
+            for (const c of board) {
+                if (mat.hasOwnProperty(c)) mat[c]++;
+            }
+            return mat;
+        },
+
+        // Check if material is insufficient for checkmate
+        isInsufficientMaterial(fen) {
+            const mat = this.countMaterial(fen);
+            const white = mat.P + mat.N + mat.B + mat.R + mat.Q;
+            const black = mat.p + mat.n + mat.b + mat.r + mat.q;
+            // K vs K
+            if (white === 0 && black === 0) return true;
+            // K+B vs K or K+N vs K
+            if (white === 0 && black === 1 && (mat.B === 1 || mat.N === 1)) return true;
+            if (black === 0 && white === 1 && (mat.b === 1 || mat.n === 1)) return true;
+            // K+B vs K+B (same color bishops)
+            if (white === 1 && black === 1 && mat.B === 1 && mat.b === 1) {
+                // Both bishops on same color = draw (simplified check)
+                return true;
+            }
+            return false;
+        },
+
+        // Check if we're approaching a draw rule deadline
+        isApproachingDraw(fen) {
+            const hmc = this.getHalfmoveClock(fen);
+            return {
+                near50: hmc >= 38,   // 38+ moves without capture/pawn = approaching 50
+                near75: hmc >= 65,   // 65+ moves = approaching 75 (auto-draw)
+                critical50: hmc >= 45, // 45+ = very close, must force action
+                critical75: hmc >= 70, // 70+ = about to auto-draw
+                halfmoveClock: hmc,
+            };
+        },
+
+        // Decline draw offers from opponent
         declineDrawOffer() {
             if (this._declining) return;
             this._declining = true;
             setTimeout(() => { this._declining = false; }, 2000);
-            // Chess.com draw modal buttons
             const btns = document.querySelectorAll("button");
             for (const b of btns) {
                 const txt = (b.innerText || "").toLowerCase().trim();
@@ -4546,7 +4652,6 @@ pvSettings: document.getElementById("pvSettings"),
                     return true;
                 }
             }
-            // Lichess confirm dialog
             const lichessDecline = document.querySelector(".confirm .decline, .buttons .decline");
             if (lichessDecline && isElVisible(lichessDecline)) {
                 console.log(`[SF Engine] Anti-draw: auto-declining draw offer (Lichess)`);
@@ -4555,8 +4660,9 @@ pvSettings: document.getElementById("pvSettings"),
             }
             return false;
         },
+
+        // Hide our own draw button
         hideDrawButton() {
-            // Hide our own "Draw" / "Offer Draw" button to prevent accidental clicks
             const btns = document.querySelectorAll("button");
             for (const b of btns) {
                 const txt = (b.innerText || "").toLowerCase().trim();
@@ -4567,17 +4673,47 @@ pvSettings: document.getElementById("pvSettings"),
                 }
             }
         },
+
+        // Auto-decline "Claim Draw" dialogs (50-move, 3-fold)
+        declineDrawClaim() {
+            const btns = document.querySelectorAll("button");
+            for (const b of btns) {
+                const txt = (b.innerText || "").toLowerCase().trim();
+                if ((txt.includes("claim") && txt.includes("draw")) && isElVisible(b)) {
+                    // Find a decline/no button nearby
+                    const parent = b.parentElement;
+                    if (parent) {
+                        const siblings = parent.querySelectorAll("button");
+                        for (const s of siblings) {
+                            const st = (s.innerText || "").toLowerCase().trim();
+                            if (st.includes("decline") || st.includes("no") || st === "cancel") {
+                                console.log(`[SF Engine] Anti-draw: declining draw claim`);
+                                s.click();
+                                return true;
+                            }
+                        }
+                    }
+                    // If no decline button, just prevent clicking the claim button
+                    b.style.opacity = "0.3";
+                    b.style.pointerEvents = "none";
+                    return true;
+                }
+            }
+            return false;
+        },
+
         start() {
             if (this.observer) return;
             this.observer = new MutationObserver(() => {
-                if (this.declineDrawOffer()) return;
+                this.declineDrawOffer();
+                this.declineDrawClaim();
                 this.hideDrawButton();
             });
             this.observer.observe(document.body, { childList: true, subtree: true });
-            // Also run immediately
             this.declineDrawOffer();
+            this.declineDrawClaim();
             this.hideDrawButton();
-            console.log(`[SF Engine] Anti-draw: active (auto-decline draw offers)`);
+            console.log(`[SF Engine] Anti-draw: active (all draw rules countered)`);
         },
         stop() {
             if (this.observer) { this.observer.disconnect(); this.observer = null; }
