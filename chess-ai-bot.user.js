@@ -2530,6 +2530,7 @@ self.onmessage = function(e) {
         const normEval = evalNum !== null ? (needsFlip ? ourSign * evalNum : evalNum) : null;
         const normMate = mateNum !== null ? (needsFlip ? ourSign * mateNum : mateNum) : null;
         state.currentMateNorm = normMate;
+        state.currentNormEval = normEval;
 
         if (settings.showEvalBar) EvalBar.update(normEval, normMate);
 
@@ -2800,6 +2801,7 @@ function triggerAutoMove(fen = null) {
      // ─── Anti-Ban: NEW features (centipawn loss, setpoint, accuracy) ──
      let selectedMove = state.currentBestMove;
      let moveReplaced = false;
+     const normEval = state.currentNormEval;
 
      // 1. PERFORMANCE CONSISTENCY: Track accuracy to detect spikes
      if (normEval !== null && state.prevEval !== undefined) {
