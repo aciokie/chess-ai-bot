@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.9.1
+// @version          11.9.2
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1859,6 +1859,12 @@ self.onmessage = function(e) {
                     try {
                         const usingModule = !!compiledModule;
                         console.log(`[SF Engine] Building WASM-patched worker (${usingModule ? "COMPILED-MODULE mode" : "bytes mode"}: JS ${jsCode?.length || 0} chars, WASM ${wasmBytes?.length || 0} bytes)...`);
+                        // Patch Lichess sf_19.js: replace import.meta.url with our WASM URL
+                        if (m.jsUrl && m.jsUrl.includes('stockfish-web') && jsCode) {
+                            const wasmUrl = m.wasmUrl || DEFAULT_WASM_URL;
+                            jsCode = jsCode.replace(/new URL\("sf_19\.wasm",import\.meta\.url\)\.href/g, `\"${wasmUrl}\"`);
+                            console.log(`[SF Engine] Patched import.meta.url -> ${wasmUrl}`);
+                        }
                         // Cache BEFORE building — buildWasmPatchedEngine transfers
                         // wasmBytes.buffer to the worker (zero-copy), which
                         // neuters the ArrayBuffer for structured cloning.
