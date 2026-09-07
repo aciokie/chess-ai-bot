@@ -1404,7 +1404,17 @@ self.onmessage = function(e) {
 };
 `;
         const blob = new Blob([bootstrapCode], { type: "application/javascript" });
-        const worker = new Worker(URL.createObjectURL(blob));
+        const blobUrl = URL.createObjectURL(blob);
+        let worker;
+        try {
+            worker = new Worker(blobUrl);
+        } catch (e) {
+            console.warn(`[SF Engine] blob URL Worker failed (${e.message}), trying data URI fallback...`);
+            // Fallback: use data URI (some CSPs block blob URLs)
+            const dataUri = 'data:application/javascript;base64,' + btoa(unescape(encodeURIComponent(bootstrapCode)));
+            worker = new Worker(dataUri);
+        }
+        URL.revokeObjectURL(blobUrl);  // Clean up immediately
         if (moduleMode) {
             worker.postMessage({ __type: "launch-module", jsCode: jsCode, wasmModule: compiledModule }, [compiledModule]);
         } else {
@@ -1417,7 +1427,17 @@ self.onmessage = function(e) {
     // Build a Worker from a pure asm.js JS string (for old SF 6/8/10/11)
     function buildAsmJsEngine(jsCode) {
         const blob = new Blob([jsCode], { type: "application/javascript" });
-        return new Worker(URL.createObjectURL(blob));
+        const blobUrl = URL.createObjectURL(blob);
+        let worker;
+        try {
+            worker = new Worker(blobUrl);
+        } catch (e) {
+            console.warn(`[SF Engine] asm.js blob URL Worker failed, trying data URI...`);
+            const dataUri = 'data:application/javascript;base64,' + btoa(unescape(encodeURIComponent(jsCode)));
+            worker = new Worker(dataUri);
+        }
+        URL.revokeObjectURL(blobUrl);
+        return worker;
     }
 
     function finalizeEngine(modelId) {
@@ -1608,16 +1628,34 @@ self.onmessage = function(e) {
     }
 
     function xhrBinary(url, cb, errCb, onProgress) {
-        GM_xmlhttpRequest({
-            method: "GET", url, responseType: "arraybuffer", timeout: 180000,
-            onload: (r) => {
-                if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                cb(new Uint8Array(r.response));
-            },
-            onerror: (e) => errCb(new Error("Binary download failed: " + url)),
-            ontimeout: () => errCb(new Error("Binary timeout (180s): " + url + " - WASM is ~113MB, check network speed")),
-            onprogress: (e) => { if (onProgress && e.lengthComputable) onProgress(e.loaded, e.total); },
-        });
+        // Try GM_xmlhttpRequest first (bypasses CORS), then fallback to fetch()
+        let tried = false;
+        const tryFetch = () => {
+            if (tried) return;
+            tried = true;
+            console.log(`[SF Engine] GM_xmlhttpRequest failed, trying fetch() fallback...`);
+            fetch(url).then(r => {
+                if (!r.ok) { errCb(new Error(`fetch HTTP ${r.status}`)); return; }
+                return r.arrayBuffer();
+            }).then(buf => {
+                if (buf) cb(new Uint8Array(buf));
+            }).catch(e => errCb(new Error("Both GM_xmlhttpRequest and fetch failed: " + e.message)));
+        };
+        try {
+            GM_xmlhttpRequest({
+                method: "GET", url, responseType: "arraybuffer", timeout: 180000,
+                onload: (r) => {
+                    if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
+                    cb(new Uint8Array(r.response));
+                },
+                onerror: (e) => { console.warn(`[SF Engine] GM_xmlhttpRequest error, trying fetch...`); tryFetch(); },
+                ontimeout: () => { console.warn(`[SF Engine] GM_xmlhttpRequest timeout (180s), trying fetch...`); tryFetch(); },
+                onprogress: (e) => { if (onProgress && e.lengthComputable) onProgress(e.loaded, e.total); },
+            });
+        } catch (e) {
+            console.warn(`[SF Engine] GM_xmlhttpRequest exception, trying fetch...`, e);
+            tryFetch();
+        }
     }
 
     // ─── Main load entry point ────────────────────────────────────────────────
