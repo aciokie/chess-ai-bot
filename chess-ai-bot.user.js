@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.4.0
+// @version          11.5.0
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -105,6 +105,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasWDL:          true,   // UCI_ShowWDL
             hasContempt:     false,  // removed in SF 14
             hasMinThink:     false,  // removed in SF 12
+            hasRepetition:   true,   // SF 14+ anti-repetition
             // Per-model defaults
             defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
                         limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
@@ -126,6 +127,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasWDL:          true,
             hasContempt:     false,  // removed in SF 14
             hasMinThink:     false,  // removed in SF 12
+            hasRepetition:   true,   // SF 14+ anti-repetition
             defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
                         limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
         },
@@ -146,6 +148,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasWDL:          false,
             hasContempt:     true,   // present through SF 13
             hasMinThink:     true,   // present through SF 11
+            hasRepetition:   false,  // SF < 14
             defaults: { hashMB: 32, moveOverhead: 100, slowMover: 100, skillLevel: 20,
                         contempt: 24, minThinkTime: 20 },
         },
@@ -166,6 +169,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasWDL:          false,
             hasContempt:     true,
             hasMinThink:     true,   // present through SF 11
+            hasRepetition:   false,  // SF < 14
             defaults: { hashMB: 32, moveOverhead: 100, slowMover: 100, skillLevel: 20,
                         contempt: 24, minThinkTime: 20 },
         },
@@ -186,6 +190,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasWDL:          false,
             hasContempt:     true,
             hasMinThink:     true,   // present through SF 11
+            hasRepetition:   false,  // SF < 14
             defaults: { hashMB: 16, moveOverhead: 100, slowMover: 100, skillLevel: 20,
                         contempt: 24, minThinkTime: 20 },
         },
@@ -1296,6 +1301,11 @@ const getMoveWinPct = (cp, mate) => {
         }
         if (m.hasContempt) cmds.push(`setoption name Contempt value ${settings.localContempt}`);
         cmds.push("setoption name MultiPV value 1");
+        // Anti-draw: force engine to avoid repetition-draw positions.
+        // Repetition option (SF 14+): high value = engine tries harder to avoid repeating.
+        // Contempt (SF 9-13): high positive value = engine plays for win, not draw.
+        if (m.hasRepetition) cmds.push("setoption name Repetition value 5");
+        if (m.hasContempt) cmds.push(`setoption name Contempt value 100`);
         cmds.forEach(c => state.localEngine.postMessage(c));
         state.lastMultiPV = 1;
     }
@@ -4515,6 +4525,65 @@ pvSettings: document.getElementById("pvSettings"),
         }, getRandomInt(2000, 4000));
     }
 
+    // ─── ANTI-DRAW: auto-decline draw offers + prevent draw offers ──────────────
+    // This is a default feature that cannot be turned off.
+    // Watches for draw offer dialogs and auto-clicks "Decline" / "No thanks".
+    // Also hides our own draw offer button to prevent accidental offers.
+    const AntiDraw = {
+        observer: null,
+        _declining: false,
+        declineDrawOffer() {
+            if (this._declining) return;
+            this._declining = true;
+            setTimeout(() => { this._declining = false; }, 2000);
+            // Chess.com draw modal buttons
+            const btns = document.querySelectorAll("button");
+            for (const b of btns) {
+                const txt = (b.innerText || "").toLowerCase().trim();
+                if ((txt.includes("decline") || txt.includes("no thanks") || txt.includes("no, thanks")) && isElVisible(b)) {
+                    console.log(`[SF Engine] Anti-draw: auto-declining draw offer`);
+                    b.click();
+                    return true;
+                }
+            }
+            // Lichess confirm dialog
+            const lichessDecline = document.querySelector(".confirm .decline, .buttons .decline");
+            if (lichessDecline && isElVisible(lichessDecline)) {
+                console.log(`[SF Engine] Anti-draw: auto-declining draw offer (Lichess)`);
+                lichessDecline.click();
+                return true;
+            }
+            return false;
+        },
+        hideDrawButton() {
+            // Hide our own "Draw" / "Offer Draw" button to prevent accidental clicks
+            const btns = document.querySelectorAll("button");
+            for (const b of btns) {
+                const txt = (b.innerText || "").toLowerCase().trim();
+                if ((txt === "draw" || txt === "offer draw" || txt === "offer a draw") && isElVisible(b)) {
+                    b.style.opacity = "0.3";
+                    b.style.pointerEvents = "none";
+                    b.title = "Draw offers disabled (anti-draw)";
+                }
+            }
+        },
+        start() {
+            if (this.observer) return;
+            this.observer = new MutationObserver(() => {
+                if (this.declineDrawOffer()) return;
+                this.hideDrawButton();
+            });
+            this.observer.observe(document.body, { childList: true, subtree: true });
+            // Also run immediately
+            this.declineDrawOffer();
+            this.hideDrawButton();
+            console.log(`[SF Engine] Anti-draw: active (auto-decline draw offers)`);
+        },
+        stop() {
+            if (this.observer) { this.observer.disconnect(); this.observer = null; }
+        }
+    };
+
     // Set up MutationObserver to detect board changes (moves made)
     function setupBoardObserver() {
         const boardEl = document.querySelector(CONFIG.BOARD_SEL);
@@ -4558,6 +4627,7 @@ pvSettings: document.getElementById("pvSettings"),
     setupBoardObserver();
     scheduleBackupPoll();
     startGameOverPoll();
+    AntiDraw.start();
     if (typeof GM_xmlhttpRequest === "function") {
         let ver = "";
         try { if (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) ver = String(GM_info.script.version); } catch (e) {}
