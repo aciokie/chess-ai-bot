@@ -262,6 +262,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         lastOpponentCapture: false,
         lastSeenFENPrev: "",
         prevEval: null,
+        engineLoadRetried: false,
     };
     const DEFAULT_SETTINGS = {
         engineMode: "local",
@@ -1606,15 +1607,16 @@ self.onmessage = function(e) {
         });
     }
 
-    function xhrBinary(url, cb, errCb) {
+    function xhrBinary(url, cb, errCb, onProgress) {
         GM_xmlhttpRequest({
-            method: "GET", url, responseType: "arraybuffer", timeout: 30000,
+            method: "GET", url, responseType: "arraybuffer", timeout: 180000,
             onload: (r) => {
                 if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
                 cb(new Uint8Array(r.response));
             },
             onerror: (e) => errCb(new Error("Binary download failed: " + url)),
-            ontimeout: () => errCb(new Error("Binary timeout: " + url)),
+            ontimeout: () => errCb(new Error("Binary timeout (180s): " + url + " - WASM is ~113MB, check network speed")),
+            onprogress: (e) => { if (onProgress && e.lengthComputable) onProgress(e.loaded, e.total); },
         });
     }
 
@@ -1646,21 +1648,35 @@ self.onmessage = function(e) {
 
         // Last-resort safety net: every earlier step (IDB open, cache reads) is
         // timeout-guarded, but if anything unforeseen stalls the chain, this
-        // fires once after 120s of "loading" with no worker built and reports a
-        // real error instead of leaving the engine stuck loading forever
+        // fires once after 300s of "loading" with no worker built and attempts
+        // a retry instead of leaving the engine stuck loading forever
         // (incognito/private mode often blocks or stalls IndexedDB).
         if (state.engineLoadWatchdog) { clearTimeout(state.engineLoadWatchdog); state.engineLoadWatchdog = null; }
         state.engineLoadWatchdog = setTimeout(() => {
             state.engineLoadWatchdog = null;
             if (!isCurrentLoad()) return;
             if (!state.localEngine && state.engineLoadingInProgress) {
+                console.warn(`[SF Engine] Engine load watchdog: 300s timeout, attempting retry...`);
                 state.engineLoadingInProgress = false;
-                state.isThinking = false;
-                state.pendingLocalFEN = null;
-                state.pendingLocalDepth = null;
                 state.engineLoadGeneration++;
-                state.engineRetryAt = Date.now() + 120000;
-                setEngineStatus("error", "Engine load timed out (storage/network stalled in this window). Try the Reinstall button or a normal window.");
+                // Auto-retry once, then give up with error
+                if (!state.engineLoadRetried) {
+                    state.engineLoadRetried = true;
+                    setEngineStatus("loading", "Load timed out, retrying...");
+                    console.log(`[SF Engine] Auto-retrying engine load...`);
+                    setTimeout(() => {
+                        if (!state.localEngine && !state.engineLoadingInProgress) {
+                            loadLocalEngine();
+                        }
+                    }, 2000);
+                } else {
+                    state.isThinking = false;
+                    state.pendingLocalFEN = null;
+                    state.pendingLocalDepth = null;
+                    state.engineRetryAt = Date.now() + 120000;
+                    state.engineLoadRetried = false;
+                    setEngineStatus("error", "Engine load failed after retry. Try the Reinstall button or check your network.");
+                }
             }
         }, 300000);
 
@@ -1782,22 +1798,61 @@ self.onmessage = function(e) {
 
                 const fetchWasm = (resolve, reject) => {
                     if (!m.wasmUrl) { console.log(`[SF Engine] No WASM URL for this model`); resolve(null); return; }
-                    if (db) {
-                        readCache(db, wasmKey, (_, cachedWasm) => {
-                            if (!isCurrentLoad()) return;
-                            if (cachedWasm) {
-                                console.log(`[SF Engine] Found cached WASM in IndexedDB (${cachedWasm.length} bytes)`);
-                                resolve(cachedWasm);
-                            } else {
-                                console.log(`[SF Engine] No cached WASM, downloading from ${m.wasmUrl}...`);
-                                xhrBinary(m.wasmUrl, (bytes) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] WASM downloaded (${bytes.length} bytes), caching...`); writeCacheAsync(db, wasmKey, bytes); resolve(bytes); },
-                                (e) => { if (!isCurrentLoad()) return; reject(new Error(`WASM download failed: ${e.message || e}. URL: ${m.wasmUrl}. Check: 1) Network 2) unpkg.com 3) ~113MB download allowed`)); });
-                            }
-                        });
-                    } else {
-                        console.log(`[SF Engine] No IndexedDB, downloading WASM directly from ${m.wasmUrl}...`);
-                        xhrBinary(m.wasmUrl, resolve, (e) => reject(new Error(`WASM download failed (no DB): ${e.message || e}. URL: ${m.wasmUrl}`)));
-                    }
+                    const attemptDownload = (retriesLeft) => {
+                        if (db) {
+                            readCache(db, wasmKey, (_, cachedWasm) => {
+                                if (!isCurrentLoad()) return;
+                                if (cachedWasm) {
+                                    console.log(`[SF Engine] Found cached WASM in IndexedDB (${cachedWasm.length} bytes)`);
+                                    resolve(cachedWasm);
+                                } else {
+                                    console.log(`[SF Engine] No cached WASM, downloading from ${m.wasmUrl}... (attempt ${4 - retriesLeft}/3)`);
+                                    setEngineStatus("loading", `Downloading WASM... (0%)`);
+                                    let lastProgressLog = 0;
+                                    xhrBinary(m.wasmUrl, (bytes) => {
+                                        if (!isCurrentLoad()) return;
+                                        console.log(`[SF Engine] WASM downloaded (${bytes.length} bytes), caching...`);
+                                        writeCacheAsync(db, wasmKey, bytes);
+                                        resolve(bytes);
+                                    },
+                                    (e) => {
+                                        if (!isCurrentLoad()) return;
+                                        if (retriesLeft > 1) {
+                                            console.warn(`[SF Engine] WASM download failed, retrying... (${retriesLeft - 1} retries left)`);
+                                            setEngineStatus("loading", `WASM download failed, retrying...`);
+                                            setTimeout(() => attemptDownload(retriesLeft - 1), 3000);
+                                        } else {
+                                            reject(new Error(`WASM download failed after 3 attempts: ${e.message || e}. URL: ${m.wasmUrl}. Check: 1) Network 2) unpkg.com 3) ~113MB download allowed`));
+                                        }
+                                    },
+                                    (loaded, total) => {
+                                        const pct = Math.round((loaded / total) * 100);
+                                        const mb = (loaded / 1048576).toFixed(1);
+                                        const totalMb = (total / 1048576).toFixed(0);
+                                        // Log progress every 10%
+                                        if (pct >= lastProgressLog + 10) {
+                                            lastProgressLog = pct;
+                                            console.log(`[SF Engine] WASM download: ${pct}% (${mb}/${totalMb} MB)`);
+                                        }
+                                        setEngineStatus("loading", `Downloading WASM... ${pct}% (${mb}MB)`);
+                                    });
+                                }
+                            });
+                        } else {
+                            console.log(`[SF Engine] No IndexedDB, downloading WASM directly from ${m.wasmUrl}...`);
+                            setEngineStatus("loading", "Downloading WASM (no cache)...");
+                            xhrBinary(m.wasmUrl, resolve, (e) => {
+                                if (!isCurrentLoad()) return;
+                                if (retriesLeft > 1) {
+                                    console.warn(`[SF Engine] WASM download failed, retrying... (${retriesLeft - 1} retries left)`);
+                                    setTimeout(() => attemptDownload(retriesLeft - 1), 3000);
+                                } else {
+                                    reject(new Error(`WASM download failed (no DB, 3 attempts): ${e.message || e}. URL: ${m.wasmUrl}`));
+                                }
+                            });
+                        }
+                    };
+                    attemptDownload(3);
                 };
 
                 // Check for a COMPILED MODULE first (fastest path — skips the
