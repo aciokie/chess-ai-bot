@@ -1859,11 +1859,17 @@ self.onmessage = function(e) {
                     try {
                         const usingModule = !!compiledModule;
                         console.log(`[SF Engine] Building WASM-patched worker (${usingModule ? "COMPILED-MODULE mode" : "bytes mode"}: JS ${jsCode?.length || 0} chars, WASM ${wasmBytes?.length || 0} bytes)...`);
-                        // Patch Lichess sf_19.js: replace import.meta.url with our WASM URL
+                        // Patch Lichess sf_19.js: replace ALL import.meta.url with actual URLs
                         if (m.jsUrl && m.jsUrl.includes('stockfish-web') && jsCode) {
                             const wasmUrl = m.wasmUrl || DEFAULT_WASM_URL;
-                            jsCode = jsCode.replace(/new URL\("sf_19\.wasm",import\.meta\.url\)\.href/g, `\"${wasmUrl}\"`);
-                            console.log(`[SF Engine] Patched import.meta.url -> ${wasmUrl}`);
+                            const jsUrl = m.jsUrl;
+                            // Replace all import.meta.url occurrences
+                            jsCode = jsCode.replace(/import\.meta\.url/g, `\"${wasmUrl}\"`);
+                            // Replace new URL("sf_19.wasm", import.meta.url).href
+                            jsCode = jsCode.replace(/new URL\("sf_19\.wasm",\s*\"[^\"]+\"\)\.href/g, `\"${wasmUrl}\"`);
+                            // Replace new URL("sf_19.js", import.meta.url).href
+                            jsCode = jsCode.replace(/new URL\("sf_19\.js",\s*\"[^\"]+\"\)\.href/g, `\"${jsUrl}\"`);
+                            console.log(`[SF Engine] Patched import.meta.url -> wasm: ${wasmUrl}, js: ${jsUrl}`);
                         }
                         // Cache BEFORE building — buildWasmPatchedEngine transfers
                         // wasmBytes.buffer to the worker (zero-copy), which
