@@ -204,6 +204,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         isThinking: !1,
         ui: {},
         lastSentFEN: "",
+        actualDepth: null,
         currentSearchFEN: "",
         pendingAbortEchoes: 0,
         lastSanitizedBoardFEN: "",
@@ -1965,7 +1966,8 @@ self.onmessage = function(e) {
             else if (hmc >= 45) { d += 4; console.log(`[SF Engine] Anti-draw: 50-move rule approaching (hmc=${hmc}), depth +4 → ${d}`); }
             else if (hmc >= 38) { d += 2; console.log(`[SF Engine] Anti-draw: 50-move rule warning (hmc=${hmc}), depth +2 → ${d}`); }
         }
-        return Math.min(d, 30);
+        state.actualDepth = Math.min(d, 30);
+        return state.actualDepth;
     }
     function computeTimeManagedDelay() {
         if (!settings.timeManagement) return null;
@@ -3523,7 +3525,10 @@ function triggerAutoMove(fen = null) {
                         </div>
                         <div class="row">
                             <label>Depth <span style="color:#666;">(max <span id="lblMaxDepth">18</span>)</span></label>
-                            <input type="number" id="inpDepth" min="1" max="18" value="${settings.depth}">
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                <input type="number" id="inpDepth" min="1" max="18" value="${settings.depth}">
+                                <span id="lblActualDepth" style="font-size:0.75em; color:#4fc3f7; display:none;" title="Anti-draw depth boost active"></span>
+                            </div>
                         </div>
                         <div class="row show-cloud">
                             <label>Max Time (ms)</label>
@@ -3885,6 +3890,7 @@ function triggerAutoMove(fen = null) {
             btnBullet: document.getElementById("btnBullet"),
             selMode: document.getElementById("selMode"),
             inpDepth: document.getElementById("inpDepth"),
+            lblActualDepth: document.getElementById("lblActualDepth"),
             inpTime: document.getElementById("inpTime"),
             inpSearch: document.getElementById("inpSearch"),
             chkRun: document.getElementById("chkRun"),
@@ -4436,6 +4442,14 @@ pvSettings: document.getElementById("pvSettings"),
         if (state.ui.logSent) state.ui.logSent.innerText = state.lastPayload;
         if (state.ui.logRec) state.ui.logRec.innerText = state.lastResponse;
         if (state.ui.inpDepth && document.activeElement !== state.ui.inpDepth) state.ui.inpDepth.value = settings.depth;
+        // Show anti-draw depth boost indicator
+        if (state.ui.lblActualDepth && state.actualDepth && state.actualDepth > settings.depth) {
+            state.ui.lblActualDepth.textContent = `→ ${state.actualDepth}`;
+            state.ui.lblActualDepth.style.display = "inline";
+            state.ui.lblActualDepth.title = `Anti-draw: +${state.actualDepth - settings.depth} depth boost (50/75-move rule)`;
+        } else if (state.ui.lblActualDepth) {
+            state.ui.lblActualDepth.style.display = "none";
+        }
     }
     const START_FEN_PIECES = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 
