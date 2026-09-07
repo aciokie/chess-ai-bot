@@ -1420,6 +1420,8 @@ self.onmessage = function(e) {
                         self.postMessage("__probe:patched-import-meta wasm=" + wasmUrl + " js=" + jsUrl);
                     }
                 }
+                // Strip export statements (Lichess sf_19.js is ES module, we run in classic Worker)
+                d.jsCode = d.jsCode.replace(/\bexport\s+/g, "");
                 var F = new Function(d.jsCode);
                 F();
             } catch (err) {
