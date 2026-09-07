@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.9.4
+// @version          11.9.5
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -17,8 +17,7 @@
 // @match         https://www.chess.com/daily
 // @connect       chess-api.com
 // @connect       stockfish.online
-// @connect       unpkg.com
-// @connect       lichess-org
+
 // @grant         GM_getResourceText
 // @grant         GM_getValue
 // @grant         GM_setValue
@@ -1891,14 +1890,13 @@ self.onmessage = function(e) {
                     }
                 };
 
-                // Fetch both JS and WASM from embedded resources (instant, no download)
+                // Fetch both JS and WASM in parallel, cache each independently
                 const fetchJs = (resolve, reject) => {
-                    const embedded = GM_getResourceText("stockfish19.js");
-                    if (embedded) {
-                        console.log(`[SF Engine] Using embedded stockfish19.js (${embedded.length} chars)`);
-                        resolve(embedded); return;
+                    const bundled = GM_getResourceText("stockfish.js");
+                    if (bundled) {
+                        console.log(`[SF Engine] Using bundled stockfish.js resource (${bundled.length} chars)`);
+                        resolve(bundled); return;
                     }
-                    // Fallback to old method
                     if (db) {
                         readCache(db, jsKey, (_, cachedJs) => {
                             if (!isCurrentLoad()) return;
@@ -1917,14 +1915,6 @@ self.onmessage = function(e) {
                 };
 
                 const fetchWasm = (resolve, reject) => {
-                    const embeddedB64 = GM_getResourceText("stockfish19.wasm");
-                    if (embeddedB64) {
-                        console.log(`[SF Engine] Using embedded stockfish19.wasm (${embeddedB64.length} b64 chars)`);
-                        const bytes = Uint8Array.from(atob(embeddedB64), c => c.charCodeAt(0));
-                        console.log(`[SF Engine] Embedded WASM decoded (${bytes.length} bytes)`);
-                        resolve(bytes); return;
-                    }
-                    // Fallback to old download method
                     if (!m.wasmUrl) { console.log(`[SF Engine] No WASM URL for this model`); resolve(null); return; }
                     const attemptDownload = (retriesLeft) => {
                         if (db) {
