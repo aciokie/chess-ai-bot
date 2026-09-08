@@ -54,6 +54,13 @@
     const STOCKFISH_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAAsTAAALEwEAmpwYAAAEGklEQVR4nO2ZW2gcVRjH/9+Z3ewm22xMNtVGU9RIxNqmFxF8sC0iFhF8UF980QcFL1jwaRELXnwQBC94UfBBEQtK0Yqi1LwgaL0k0DQm2zapm2az2d1kd2bO8f/M7Gw22U12052lB34wzMzO+Z/vO+d85ztnlkQIIYQQQgghhBBCSKtQSt1BCHmOEDKplLqD53n7x8fH9xBCfC2U0r2EkNcIIY/xPG9rIR4F8CGl9EEA+wghG5s9+yGl9F0A+9sKEEJ8B+A5AMcIIb6W/v8B4BCl9AkA+1oK8Ty/m1L6LID9hJCNzb7ZhRL6IoD9bQcopc8SQp4ghExt9mw/pfR5APtbcwH1C68W/l8B3wO463+xAOu5gH2EkG2EENSX8F4A+wkhG7mA+l3gVwD3tBCAUvoYIeQpQkh/s2f7KaVPAthfFw/4HsA+QsjGZt/sJ5Q+01oArvN9Qkh/s2f7KaWPE0L2112Au8D3AO4jhGxs9u0+SulTAPbXFfA9gP2EkI3NvttPKX0KwP66Ar4HsJ8QsrHZd/sppU8C2F9XwPcA9hNCNjb7bj+l9CkA++sK+B7AfYSQjc2+208pfQrA/rYClNI9hJCnCCHTmz3bTyl9CsD+tgOU0mcIIU8RQqY3e7afUvo0gP1tBSilz1BKnwGwv60A/H8uQAh5DsB+QsjGZt98Qil9DsD+1gKU0ucIIc8QQqY2e7afUvo8gP2tBaij0N8A7iOEbGz23X5K6fMA9tcV8D2A+wghG5t9t59S+iSA/XUFfA9gPyFkY7Pv9lNKTwLYX1fA9wDuI4RsbPbd/v8U4H/fA0II8Ty/mxDiA7C/Lh7wPID9hJCNzb7dTyl9EcD+ungA8Ty/mxDiA7C/pQCldC+l9EUA+1sK8Ty/hxDya0rpCwD2txTg/7kAIeR5APtbut8ghBBC2pZ/ALy683b5qZ2oAAAAAElFTkSuQmCC";
 
     const DEFAULT_WASM_URL = "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm";
+const DEFAULT_SF19_SMALLNET_WASM_URL = "https://github.com/aciokie/chess-ai-bot/releases/download/sf19-smallnet/sf_19_smallnet.wasm";
+const DEFAULT_SF19_SMALLNET_JS_URL = "https://github.com/aciokie/chess-ai-bot/releases/download/sf19-smallnet/sf_19_smallnet.js";
+// Embedded SF19 Smallnet (base64) - set these after building
+// Run: node -e "console.log('SF19_SMALLNET_JS_B64:', require('fs').readFileSync('sf_19_smallnet.js').toString('base64'))"
+// Run: node -e "console.log('SF19_SMALLNET_WASM_B64:', require('fs').readFileSync('sf_19_smallnet.wasm').toString('base64'))"
+const SF19_SMALLNET_JS_B64 = "";   // Paste base64 of sf_19_smallnet.js here
+const SF19_SMALLNET_WASM_B64 = ""; // Paste base64 of sf_19_smallnet.wasm here
 const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-installs";
 
     // ─── Local Engine Registry ──
@@ -169,7 +176,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             defaults: { hashMB: 32, moveOverhead: 100, slowMover: 100, skillLevel: 20,
                         contempt: 24, minThinkTime: 20 },
         },
-        {
+{
             id:      "sf9_00",
             cacheKey: "sf9_00",
             label:   "Stockfish 9.0.0 — asm.js",
@@ -179,15 +186,35 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             wasmUrl: null,
             maxDepth:        18,
             hasHash:         true,
-            hasMoveOverhead: true,   // SF 9+
+            hasMoveOverhead: true,
             hasSlowMover:    true,
             hasSkillLevel:   true,
             hasNNUE:         false,
             hasWDL:          false,
             hasContempt:     true,
-            hasMinThink:     true,   // present through SF 11
+            hasMinThink:     true,
             defaults: { hashMB: 16, moveOverhead: 100, slowMover: 100, skillLevel: 20,
                         contempt: 24, minThinkTime: 20 },
+        },
+        {
+            id:      "sf19_smallnet",
+            cacheKey: "sf19_smallnet",
+            label:   "Stockfish 19 (Smallnet) — ES6 Module",
+            cdn:     "github",
+            format:  "es6-module",
+            jsUrl:   DEFAULT_SF19_SMALLNET_JS_URL,
+            wasmUrl: DEFAULT_SF19_SMALLNET_WASM_URL,
+            maxDepth:        25,
+            hasHash:         true,
+            hasMoveOverhead: true,
+            hasSlowMover:    false,
+            hasSkillLevel:   true,
+            hasNNUE:         true,
+            hasWDL:          true,
+            hasContempt:     false,
+            hasMinThink:     false,
+            defaults: { hashMB: 128, moveOverhead: 100, skillLevel: 20,
+                        limitStrength: false, elo: 3200, showWDL: true, minThinkTime: 20 },
         },
     ];
 
@@ -1394,6 +1421,112 @@ self.onmessage = function(e) {
         return new Worker(URL.createObjectURL(blob));
     }
 
+    function buildEs6ModuleEngine(jsCode, wasmBytes) {
+        // ES6 module worker: uses import and type: 'module'
+        // The JS code must be an ES module (has export/import)
+        const wasmB64 = wasmBytes ? btoa(String.fromCharCode(...new Uint8Array(wasmBytes))) : (SF19_SMALLNET_WASM_B64 || null);
+        const jsB64 = SF19_SMALLNET_JS_B64 || null;
+        
+        // Determine the expected WASM filename from the JS code
+        const wasmUrlMatch = jsCode ? jsCode.match(/['"]([^'"]+\.wasm)['"]/) : null;
+        const expectedWasmName = wasmUrlMatch ? wasmUrlMatch[1] : 'sf_19_smallnet.wasm';
+        
+        const moduleLoader = `
+            // ES6 Module Stockfish Loader (SF19 Smallnet)
+            ${jsB64 ? `import { default: StockfishFactory } from 'data:text/javascript;base64,${jsB64}';` : `import { default: StockfishFactory } from '${jsCode}';`}
+            
+            let stockfish = null;
+            let wasmModuleLoaded = false;
+            
+            // Override fetch for WASM if embedded
+            ${wasmB64 ? `
+            const wasmBase64 = '${wasmB64}';
+            const wasmBytes = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0));
+            const originalFetch = self.fetch;
+            self.fetch = async (url, opts) => {
+                const urlStr = String(url);
+                // Intercept WASM loads - check multiple patterns
+                if (urlStr.endsWith('.wasm') || 
+                    urlStr.includes('${expectedWasmName}') ||
+                    (urlStr.includes('stockfish') && urlStr.endsWith('.wasm'))) {
+                    return new Response(wasmBytes, { 
+                        headers: { 'Content-Type': 'application/wasm' } 
+                    });
+                }
+                return originalFetch(url, opts);
+            };
+            ` : ''}
+            
+            // UCI interface functions (matching lichess initModule.js)
+            self.uci = function(command) {
+                if (!stockfish) return;
+                const sz = lengthBytesUTF8(command) + 1;
+                const utf8 = _malloc(sz);
+                if (!utf8) throw new Error('Could not allocate ' + sz + ' bytes');
+                stringToUTF8(command, utf8, sz);
+                _uci(utf8);
+            };
+            
+            self.getRecommendedNnue = function(index) {
+                if (!stockfish) return undefined;
+                return UTF8ToString(_getRecommendedNnue(index)) || undefined;
+            };
+            
+            self.setNnueBuffer = function(buf, index) {
+                if (!stockfish || !buf || buf.byteLength <= 0) return;
+                const heapBuf = _malloc(buf.byteLength);
+                if (!heapBuf) throw new Error('could not allocate ' + buf.byteLength + ' bytes');
+                if (typeof growMemViews === 'function') growMemViews();
+                HEAPU8.set(buf, heapBuf);
+                _setNnueBuffer(heapBuf, buf.byteLength, index || 0);
+            };
+            
+            self.print = function(text) {
+                self.listen?.(text);
+                if (text && (text.startsWith('info ') || text.startsWith('bestmove') || 
+                    text.startsWith('uciok') || text.startsWith('readyok'))) {
+                    self.postMessage({ type: 'uci', text: text });
+                }
+            };
+            
+            self.printErr = function(text) {
+                self.onError?.(text);
+                console.error('[SF Engine]', text);
+            };
+            
+            // Initialize Stockfish
+            StockfishFactory().then(instance => {
+                stockfish = instance;
+                // Set default EvalFile for embedded smallnet (SF19 smallnet uses single network)
+                if (stockfish.uci) {
+                    // The embedded smallnet network name - check what SF19 smallnet uses
+                    // SF19 smallnet typically uses nn-<sha256-12>.nnue format
+                    stockfish.uci('setoption name EvalFile value nn-37f18f62d772.nnue');
+                }
+                self.postMessage({ type: 'ready', engine: 'Stockfish 19 Smallnet' });
+                wasmModuleLoaded = true;
+            }).catch(err => {
+                self.postMessage({ type: 'error', text: 'Failed to init Stockfish: ' + err });
+            });
+            
+            // Handle UCI commands
+            self.onmessage = (e) => {
+                const cmd = e.data;
+                if (cmd.type === 'uci' && cmd.cmd && stockfish) {
+                    stockfish.uci(cmd.cmd);
+                } else if (cmd.type === 'init') {
+                    self.postMessage({ type: 'ready', engine: 'Stockfish 19 Smallnet' });
+                }
+            };
+            
+            console.log('[SF Worker] Stockfish 19 Smallnet ES6 module worker initialized');
+        `;
+        
+        const blob = new Blob([moduleLoader], { type: "application/javascript" });
+        const worker = new Worker(URL.createObjectURL(blob), { type: 'module' });
+        return worker;
+    }
+
     function finalizeEngine(modelId) {
         if (state.engineLoadWatchdog) { clearTimeout(state.engineLoadWatchdog); state.engineLoadWatchdog = null; }
         state.engineLoadingInProgress = false;
@@ -1403,11 +1536,27 @@ self.onmessage = function(e) {
         console.log(`[SF Engine] ${m.label} worker built, sending uci...`);
         state.engineBuildTime = performance.now();
         console.debug(`[SF Engine] Model caps:`, { hasHash: m.hasHash, hasMoveOverhead: m.hasMoveOverhead, hasSlowMover: m.hasSlowMover, hasWDL: m.hasWDL, hasSkillLevel: m.hasSkillLevel, hasNNUE: m.hasNNUE, hasContempt: m.hasContempt, hasMinThink: m.hasMinThink, maxDepth: m.maxDepth });
-        // uci handshake → engine replies uciok → handleLocalMessage flips to ready
-        state.localEngine.postMessage("uci");
+        
+        // ES6 module engines use object protocol, classic workers use string protocol
+        const isEs6Module = m.format === "es6-module";
+        
+        if (isEs6Module) {
+            // ES6 module worker uses object protocol
+            state.localEngine.postMessage({ type: 'uci', cmd: 'uci' });
+        } else {
+            // Classic worker uses string protocol
+            state.localEngine.postMessage("uci");
+        }
+        
         // Send all init options after uci (engine queues them internally)
         sendEngineInitCommands(modelId);
-        state.localEngine.postMessage("isready");
+        
+        if (isEs6Module) {
+            state.localEngine.postMessage({ type: 'uci', cmd: 'isready' });
+        } else {
+            state.localEngine.postMessage("isready");
+        }
+        
         updateUI();
         updateLocalSettingsUI();
 
@@ -1452,7 +1601,13 @@ self.onmessage = function(e) {
                 const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
                 console.log(`[SF Engine] engine alive at ${elapsed}s, still initializing — waiting`);
             }
-            try { state.localEngine.postMessage("isready"); } catch (e) { console.error(`[SF Engine] heartbeat postMessage failed:`, e); }
+            try { 
+                if (isEs6Module) {
+                    state.localEngine.postMessage({ type: 'uci', cmd: 'isready' });
+                } else {
+                    state.localEngine.postMessage("isready");
+                }
+            } catch (e) { console.error(`[SF Engine] heartbeat postMessage failed:`, e); }
             state.pendingReadyProbe = true;
         }, 15000);
     }
@@ -1695,6 +1850,98 @@ self.onmessage = function(e) {
                             setEngineStatus("error", err);
                         });
                     }
+
+            } else if (m.format === "es6-module") {
+                // ── ES6 Module path: use type: 'module' Worker with import ──────
+                const launch = (jsCode, wasmBytes) => {
+                    if (!isCurrentLoad()) return;
+                    try {
+                        console.log(`[SF Engine] Building ES6 module worker...`);
+                        state.localEngine = buildEs6ModuleEngine(jsCode, wasmBytes);
+                        state.localEngine.onerror = onEngineWorkerError;
+                        state.localEngine.onmessage = handleLocalMessage;
+                        console.log(`[SF Engine] ES6 module worker created, finalizing...`);
+                        finalizeEngine(modelId);
+                    } catch (e) {
+                        console.error(`[SF Engine] Failed to build ES6 module worker:`, e);
+                        state.engineLoadingInProgress = false;
+                        setEngineStatus("error", e.message || "Build failed");
+                    }
+                };
+                
+                // For ES6 modules, we can embed both JS and WASM inline as base64
+                // since smallnet is ~7-10MB WASM + ~20KB JS
+                // Try to load from IndexedDB cache first, then download
+                const jsKey = m.cacheKey + "_js";
+                const wasmKey = m.cacheKey + "_wasm";
+                
+                const loadFromCache = () => {
+                    // First priority: embedded base64 (fully self-contained, no network)
+                    if (SF19_SMALLNET_JS_B64 && SF19_SMALLNET_WASM_B64) {
+                        console.log(`[SF Engine] Using EMBEDDED SF19 Smallnet (base64) — zero network!`);
+                        setEngineStatus("loading", "Loading embedded engine...");
+                        const jsCode = atob(SF19_SMALLNET_JS_B64);
+                        const wasmBytes = Uint8Array.from(atob(SF19_SMALLNET_WASM_B64), c => c.charCodeAt(0));
+                        launch(jsCode, wasmBytes);
+                        return;
+                    }
+                    
+                    // Second priority: IndexedDB cache
+                    if (db) {
+                        readCache(db, jsKey, (_, cachedJs) => {
+                            if (!isCurrentLoad()) return;
+                            if (cachedJs) {
+                                readCache(db, wasmKey, (_, cachedWasm) => {
+                                    if (!isCurrentLoad()) return;
+                                    if (cachedWasm) {
+                                        console.log(`[SF Engine] Found cached ES6 module in IndexedDB`);
+                                        setEngineStatus("loading", "Loading from cache...");
+                                        launch(cachedJs, cachedWasm);
+                                    } else {
+                                        downloadAndLaunch();
+                                    }
+                                });
+                            } else {
+                                downloadAndLaunch();
+                            }
+                        });
+                    } else {
+                        downloadAndLaunch();
+                    }
+                };
+                
+                const downloadAndLaunch = () => {
+                    console.log(`[SF Engine] Downloading ES6 module from ${m.jsUrl} and WASM from ${m.wasmUrl}...`);
+                    setEngineStatus("loading", "Downloading SF19 Smallnet...");
+                    
+                    const jsPromise = new Promise((resolve, reject) => {
+                        xhrText(m.jsUrl, resolve, reject);
+                    });
+                    const wasmPromise = new Promise((resolve, reject) => {
+                        xhrBinary(m.wasmUrl, resolve, reject);
+                    });
+                    
+                    Promise.all([jsPromise, wasmPromise])
+                        .then(([jsCode, wasmBytes]) => {
+                            if (!isCurrentLoad()) return;
+                            console.log(`[SF Engine] ES6 module downloads complete: JS=${!!jsCode}, WASM=${!!wasmBytes}`);
+                            if (jsCode && wasmBytes && db) {
+                                writeCacheAsync(db, jsKey, jsCode).catch(() => {});
+                                writeCacheAsync(db, wasmKey, wasmBytes).catch(() => {});
+                            }
+                            launch(jsCode, wasmBytes);
+                        })
+                        .catch((e) => {
+                            if (!isCurrentLoad()) return;
+                            const msg = e?.message || String(e);
+                            const err = `ES6 module download failed: ${msg}`;
+                            console.error(`[SF Engine] ${err}`);
+                            state.engineLoadingInProgress = false;
+                            setEngineStatus("error", err);
+                        });
+                };
+                
+                loadFromCache();
 
             } else {
                 // ── wasm format: cache BOTH js text and wasm bytes in IndexedDB ──
@@ -2132,7 +2379,7 @@ self.onmessage = function(e) {
         } catch (e) { triggerFallback(); }
         updateUI();
     }
-    function analyzeLocal(fen, depth, wasThinking = false) {
+function analyzeLocal(fen, depth, wasThinking = false) {
         console.log(`[SF Engine] analyzeLocal called: fen=${fen?.substring(0,40)}..., depth=${depth}, engineStatus=${state.engineStatus}, hasEngine=${!!state.localEngine}`);
     if (!state.localEngine || state.engineStatus !== "ready") {
         console.warn(`[SF Engine] Cannot analyze: engine not ready (status=${state.engineStatus}, hasEngine=${!!state.localEngine})`);
@@ -2152,22 +2399,36 @@ self.onmessage = function(e) {
         state.multiPVMap = {};
         state.humanAlternatives = [];
         const wantMultiPV = settings.humanizer ? 5 : 1;
+        
+        // ES6 module engines use object protocol, classic workers use string protocol
+        const isEs6Module = m.format === "es6-module";
+        
         if (state.lastMultiPV !== wantMultiPV) {
             console.log(`[SF Engine] → setoption name MultiPV value ${wantMultiPV}`);
-            state.localEngine.postMessage(`setoption name MultiPV value ${wantMultiPV}`);
+            if (isEs6Module) {
+                state.localEngine.postMessage({ type: 'uci', cmd: `setoption name MultiPV value ${wantMultiPV}` });
+            } else {
+                state.localEngine.postMessage(`setoption name MultiPV value ${wantMultiPV}`);
+            }
             state.lastMultiPV = wantMultiPV;
         }
         console.log(`[SF Engine] → position fen ${fen}`);
         console.log(`[SF Engine] → go depth ${actualDepth}`);
         state.currentSearchFEN = fen;
-        state.localEngine.postMessage(`position fen ${fen}`);
-        state.localEngine.postMessage(`go depth ${actualDepth}`);
+        
+        if (isEs6Module) {
+            state.localEngine.postMessage({ type: 'uci', cmd: `position fen ${fen}` });
+            state.localEngine.postMessage({ type: 'uci', cmd: `go depth ${actualDepth}` });
+        } else {
+            state.localEngine.postMessage(`position fen ${fen}`);
+            state.localEngine.postMessage(`go depth ${actualDepth}`);
+        }
         // A dispatch that interrupts a running search makes the old search's
         // bestmove an abort-echo: it was computed for a FEN we've abandoned.
         // Count it so the bestmove handler drops that stale result.
         if (wasThinking) state.pendingAbortEchoes = (state.pendingAbortEchoes || 0) + 1;
         state.lastPayload = `Worker CMDs:\nsetoption name MultiPV value ${wantMultiPV}\nposition fen ${fen}\ngo depth ${actualDepth}`;
-        state.ui.liveOutput.textContent = "⚡ Local SF18 Analysis...";
+        state.ui.liveOutput.textContent = "⚡ Local SF19 Analysis...";
         updateUI();
     }
     function handleLocalMessage(e) {
@@ -2181,6 +2442,77 @@ self.onmessage = function(e) {
             }
             return;
         }
+        
+        // Handle ES6 module worker messages (object format: { type: 'uci', text: '...' })
+        if (e.data && typeof e.data === "object" && e.data.type) {
+            const msgType = e.data.type;
+            const msgText = e.data.text;
+            
+            if (msgType === 'uci' && msgText) {
+                // Handle UCI output from ES6 module worker
+                console.debug(`[SF Engine] ← ${msgText}`);
+                if (state.ui.logRec) state.ui.logRec.innerText = (state.lastResponse.length > 500 ? "..." + state.lastResponse.slice(-500) : state.lastResponse) + "\n" + msgText;
+                state.lastResponse = (state.lastResponse.length > 500 ? "..." + state.lastResponse.slice(-500) : state.lastResponse) + "\n" + msgText;
+                
+                // Engine signals it's ready — flip status immediately.
+                if (msgText.startsWith("uciok")) {
+                    console.log(`[SF Engine] Received uciok, engine initialized`);
+                    if (state.engineBuildTime) {
+                        console.log(`[SF Engine] Engine ready in ${((performance.now() - state.engineBuildTime) / 1000).toFixed(1)}s`);
+                        state.engineBuildTime = null;
+                    }
+                    if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
+                    state.pendingReadyProbe = false;
+                    state.engineRetryAt = 0;
+                    if (state.engineStatus !== "ready") {
+                        const m = getEngineById(settings.localModelId || "sf18_05");
+                        setEngineStatus("ready", "");
+                        state.lastMoveResult = `✅ ${m.label} ready.`;
+                        updateUI();
+                    }
+                    if (state.pendingLocalFEN && state.localEngine) {
+                        console.log(`[SF Engine] Processing pending FEN after uciok`);
+                        const fFEN = state.pendingLocalFEN, fDepth = state.pendingLocalDepth;
+                        state.pendingLocalFEN = null; state.pendingLocalDepth = null;
+                        state.isThinking = !1;
+                        analyzeLocal(fFEN, fDepth);
+                    }
+                    return;
+                }
+                
+                if (msgText.startsWith("readyok")) {
+                    console.log(`[SF Engine] Received readyok`);
+                    state.pendingReadyProbe = false;
+                    if (state.engineStatus !== "ready") {
+                        const m = getEngineById(settings.localModelId || "sf18_05");
+                        setEngineStatus("ready", "");
+                        state.lastMoveResult = `✅ ${m.label} ready.`;
+                        updateUI();
+                    }
+                    if (state.pendingLocalFEN && state.localEngine) {
+                        console.log(`[SF Engine] Processing pending FEN after readyok`);
+                        const fFEN = state.pendingLocalFEN, fDepth = state.pendingLocalDepth;
+                        state.pendingLocalFEN = null; state.pendingLocalDepth = null;
+                        state.isThinking = !1;
+                        analyzeLocal(fFEN, fDepth);
+                    }
+                    return;
+                }
+            }
+            
+            if (msgType === 'error' && msgText) {
+                console.error(`[SF Engine] Worker error: ${msgText}`);
+                return;
+            }
+            
+            if (msgType === 'ready') {
+                console.log(`[SF Engine] Worker ready: ${msgText}`);
+                return;
+            }
+            
+            return;
+        }
+        
         const msg = typeof e.data === "string" ? e.data : (e.data?.toString ? e.data.toString() : null);
         if (!msg || typeof msg !== "string") {
             console.warn(`[SF Engine] Received non-string message:`, e.data);
