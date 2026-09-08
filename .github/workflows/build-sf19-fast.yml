@@ -1,0 +1,58 @@
+name: Build SF19 WASM Fast (Using lichess build.py)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Build target'
+        required: true
+        default: 'sf_19'
+        type: choice
+        options:
+          - sf_19
+          - sf_19_smallnet
+
+jobs:
+  build:
+    name: Build ${{ github.event.inputs.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout lichess stockfish-web
+        uses: actions/checkout@v4
+        with:
+          repository: lichess-org/stockfish-web
+          path: stockfish-web
+
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+        with:
+          path: chess-ai-bot
+
+      - name: Setup emscripten (fast - pre-cached)
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: '3.1.70'
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Build with lichess build.py
+        run: |
+          cd stockfish-web
+          python3 build.py ${{ github.event.inputs.target }} --verify-bench 2>&1 | tee build.log
+
+      - name: Copy artifacts
+        run: |
+          cd stockfish-web
+          ls -la *.js *.wasm *.worker.js
+          cp ${{ github.event.inputs.target }}.js ${{ github.event.inputs.target }}.wasm ${{ github.event.inputs.target }}.worker.js ../chess-ai-bot/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.target }}
+          path: |
+            chess-ai-bot/${{ github.event.inputs.target }}.js
+            chess-ai-bot/${{ github.event.inputs.target }}.wasm
+            chess-ai-bot/${{ github.event.inputs.target }}.worker.js
+          retention-days: 30
