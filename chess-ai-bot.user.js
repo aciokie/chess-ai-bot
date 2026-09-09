@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.12.0
+// @version          11.13.0
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -59,8 +59,8 @@ const DEFAULT_SF19_SMALLNET_JS_URL = "https://github.com/aciokie/chess-ai-bot/re
 // Embedded SF19 Smallnet (base64) - set these after building
 // Run: node -e "console.log('SF19_SMALLNET_JS_B64:', require('fs').readFileSync('sf_19_smallnet.js').toString('base64'))"
 // Run: node -e "console.log('SF19_SMALLNET_WASM_B64:', require('fs').readFileSync('sf_19_smallnet.wasm').toString('base64'))"
-const SF19_SMALLNET_JS_B64 = "";   // Paste base64 of sf_19_smallnet.js here
-const SF19_SMALLNET_WASM_B64 = ""; // Paste base64 of sf_19_smallnet.wasm here
+const SF19_SMALLNET_JS_B64 = "YXN5bmMgZnVuY3Rpb24gU2ZfMTlfU21hbGxuZXRfV2ViKG1vZHVsZUFyZz17fSl7dmFyIG1vZHVsZVJ0bjt2YXIgaD1tb2R1bGVBcmcsYWE9ISFnbG9iYWxUaGlzLndpbmRvdyxrPSEhZ2xvYmFsVGhpcy5Xb3JrZXJHbG9iYWxTY29wZSxsPWdsb2JhbFRoaXMucHJvY2Vzcz8udmVyc2lvbnM/Lm5vZGUmJiJyZW5kZXJlciIhPWdsb2JhbFRoaXMucHJvY2Vzcz8udHlwZSxtPWsmJiJlbS1wdGhyZWFkIj09Z2xvYmFsVGhpcy5uYW1lO2lmKGwpe2NvbnN0IHtjcmVhdGVSZXF1aXJlOmF9PWF3YWl0IGltcG9ydCgibm9kZTptb2R1bGUiKTt2YXIgcmVxdWlyZT1hKGltcG9ydC5tZXRhLnVybCksd29ya2VyX3RocmVhZHM9cmVxdWlyZSgibm9kZTp3b3JrZXJfdGhyZWFkcyIpO2dsb2JhbFRoaXMuV29ya2VyPXdvcmtlcl90aHJlYWRzLldvcmtlcjttPShrPSF3b3JrZXJfdGhyZWFkcy5pc01haW5UaHJlYWQpJiYiZW0tcHRocmVhZCI9PXdvcmtlcl90aHJlYWRzLndvcmtlckRhdGF9aC5saXN0ZW58fChoLmxpc3Rlbj1hPT5jb25zb2xlLmxvZyhhKSk7Cmgub25FcnJvcnx8KGgub25FcnJvcj1hPT5jb25zb2xlLmVycm9yKGEpKTtoLmdldFJlY29tbWVuZGVkTm51ZT0oYT0wKT0+YmEoaGEoYSkpfHx2b2lkIDA7aC5zZXRObnVlQnVmZmVyPWZ1bmN0aW9uKGEsYj0wKXtpZighYSl0aHJvdyBFcnJvcigiYnVmIGlzIG51bGwiKTtpZigwPj1hLmJ5dGVMZW5ndGgpdGhyb3cgRXJyb3IoYCR7YS5ieXRlTGVuZ3RofSBieXRlcz9gKTtjb25zdCBjPWlhKGEuYnl0ZUxlbmd0aCk7aWYoIWMpdGhyb3cgRXJyb3IoYGNvdWxkIG5vdCBhbGxvY2F0ZSAke2EuYnl0ZUxlbmd0aH0gYnl0ZXNgKTtxKCk7aC5IRUFQVTguc2V0KGEsYyk7amEoYyxhLmJ5dGVMZW5ndGgsYil9O2gudWNpPWZ1bmN0aW9uKGEpe2NvbnN0IGI9a2EoYSkrMSxjPWlhKGIpO2lmKCFjKXRocm93IEVycm9yKGBDb3VsZCBub3QgYWxsb2NhdGUgJHtifSBieXRlc2ApO3QoYSxjLGIpO2xhKGMpfTtoLnByaW50PWE9PmgubGlzdGVuPy4oYSk7aC5wcmludEVycj1hPT5oLm9uRXJyb3I/LihhKTsKdmFyIG1hPVtdLG5hPSIuL3RoaXMucHJvZ3JhbSIsb2E9KGEsYik9Pnt0aHJvdyBiO30scGE9aW1wb3J0Lm1ldGEudXJsLHFhPSIiLHJhLHNhOwppZihsKXt2YXIgZnM9cmVxdWlyZSgibm9kZTpmcyIpO3BhLnN0YXJ0c1dpdGgoImZpbGU6IikmJihxYT1yZXF1aXJlKCJub2RlOnBhdGgiKS5kaXJuYW1lKHJlcXVpcmUoIm5vZGU6dXJsIikuZmlsZVVSTFRvUGF0aChwYSkpKyIvIik7c2E9YT0+e2E9dGEoYSk/bmV3IFVSTChhKTphO3JldHVybiBmcy5yZWFkRmlsZVN5bmMoYSl9O3JhPWFzeW5jIGE9PnthPXRhKGEpP25ldyBVUkwoYSk6YTtyZXR1cm4gZnMucmVhZEZpbGVTeW5jKGEsdm9pZCAwKX07MTxwcm9jZXNzLmFyZ3YubGVuZ3RoJiYobmE9cHJvY2Vzcy5hcmd2WzFdLnJlcGxhY2UoL1xcL2csIi8iKSk7bWE9cHJvY2Vzcy5hcmd2LnNsaWNlKDIpO29hPShhLGIpPT57cHJvY2Vzcy5leGl0Q29kZT1hO3Rocm93IGI7fX1lbHNlIGlmKGFhfHxrKXt0cnl7cWE9KG5ldyBVUkwoIi4iLHBhKSkuaHJlZn1jYXRjaHt9bHx8KGsmJihzYT1hPT57dmFyIGI9bmV3IFhNTEh0dHBSZXF1ZXN0O2Iub3BlbigiR0VUIixhLCExKTtiLnJlc3BvbnNlVHlwZT0KImFycmF5YnVmZmVyIjtiLnNlbmQobnVsbCk7cmV0dXJuIG5ldyBVaW50OEFycmF5KGIucmVzcG9uc2UpfSkscmE9YXN5bmMgYT0+e2E9YXdhaXQgZmV0Y2goYSx7Y3JlZGVudGlhbHM6InNhbWUtb3JpZ2luIn0pO2lmKGEub2spcmV0dXJuIGEuYXJyYXlCdWZmZXIoKTt0aHJvdyBFcnJvcihhLnN0YXR1cysiIDogIithLnVybCk7fSl9dmFyIHVhPWNvbnNvbGUubG9nLmJpbmQoY29uc29sZSksdmE9Y29uc29sZS5lcnJvci5iaW5kKGNvbnNvbGUpO2lmKGwpe3ZhciB3YT1yZXF1aXJlKCJub2RlOnV0aWwiKSx4YT1hPT4ib2JqZWN0Ij09dHlwZW9mIGE/d2EuaW5zcGVjdChhKTphO3VhPSguLi5hKT0+ZnMud3JpdGVTeW5jKDEsYS5tYXAoeGEpLmpvaW4oIiAiKSsiXG4iKTt2YT0oLi4uYSk9PmZzLndyaXRlU3luYygyLGEubWFwKHhhKS5qb2luKCIgIikrIlxuIil9dmFyIHlhPXVhLHU9dmEsdix6YT0hMSx3LHRhPWE9PmEuc3RhcnRzV2l0aCgiZmlsZTovLyIpOwpmdW5jdGlvbiBxKCl7eC5idWZmZXIhPXkuYnVmZmVyJiZBYSgpfXZhciBCYSxDYTtpZihsJiZtKXtnbG9iYWxUaGlzLnNlbGY9Z2xvYmFsVGhpczt2YXIgRGE9d29ya2VyX3RocmVhZHMucGFyZW50UG9ydDtnbG9iYWxUaGlzLnBvc3RNZXNzYWdlfHwoRGEub24oIm1lc3NhZ2UiLGE9Pmdsb2JhbFRoaXMub25tZXNzYWdlPy4oe2RhdGE6YX0pKSxnbG9iYWxUaGlzLnBvc3RNZXNzYWdlPWE9PkRhLnBvc3RNZXNzYWdlKGEpKTtwcm9jZXNzLm9uKCJ1bmNhdWdodEV4Y2VwdGlvbiIsYT0+e3Bvc3RNZXNzYWdlKHtoYToidW5jYXVnaHRFeGNlcHRpb24iLGVycm9yOmF9KTtwcm9jZXNzLmV4aXQoMSl9KX12YXIgRWE7CmlmKG0pe3ZhciBGYT0hMTtzZWxmLm9udW5oYW5kbGVkcmVqZWN0aW9uPWI9Pnt0aHJvdyBiLnJlYXNvbnx8Yjt9O2Z1bmN0aW9uIGEoYil7dHJ5e3ZhciBjPWIuZGF0YSxkPWMuaGE7aWYoImxvYWQiPT09ZCl7bGV0IGU9W107c2VsZi5vbm1lc3NhZ2U9Zj0+ZS5wdXNoKGYpO0VhPSgpPT57cG9zdE1lc3NhZ2Uoe2hhOiJsb2FkZWQifSk7Zm9yKGxldCBmIG9mIGUpYShmKTtzZWxmLm9ubWVzc2FnZT1hfTtmb3IoY29uc3QgZiBvZiBjLkxhKWlmKCFoW2ZdfHxoW2ZdLnByb3h5KWhbZl09KC4uLmcpPT57cG9zdE1lc3NhZ2Uoe2hhOiJjYWxsSGFuZGxlciIsS2E6ZixhcmdzOmd9KX0sInByaW50Ij09ZiYmKHlhPWhbZl0pLCJwcmludEVyciI9PWYmJih1PWhbZl0pO3g9Yy5XYTtBYSgpO3Y9Yy5YYTtHYSgpO0hhKCl9ZWxzZSBpZigicnVuIj09PWQpe0lhKGMua2EpO0phKGMua2EsMCwwLDEsMCwwKTtLYSgpO0xhKGMua2EpO0ZhfHw9ITA7dHJ5e01hKGMuVGEsYy52YSl9Y2F0Y2goZSl7aWYoInVud2luZCIhPQplKXRocm93IGU7fX1lbHNlInNldGltbWVkaWF0ZSIhPT1jLnRhcmdldCYmKCJjaGVja01haWxib3giPT09ZD9GYSYmTmEoKTpkJiYodShgd29ya2VyOiByZWNlaXZlZCB1bmtub3duIGNvbW1hbmQgJHtkfWApLHUoYykpKX1jYXRjaChlKXt0aHJvdyBPYSgpLGU7fX1zZWxmLm9ubWVzc2FnZT1hfXZhciBQYT0hMSxRYT0hMTtmdW5jdGlvbiBBYSgpe3ZhciBhPXguYnVmZmVyO3k9bmV3IEludDhBcnJheShhKTtSYT1uZXcgSW50MTZBcnJheShhKTtoLkhFQVBVOD1TYT1uZXcgSW50MzJBcnJheShhKTtuZXcgSW50MzJBcnJheShhKTtCPW5ldyBVaW50MzJBcnJheShhKTtuZXcgRmxvYXQzMkFycmF5KGEpO1RhPW5ldyBGbG9hdDY0QXJyYXkoYSk7Qz1uZXcgQmlnSW50NjRBcnJheShhKTtuZXcgQmlnVWludDY0QXJyYXkoYSkpfWZ1bmN0aW9uIFVhKCl7UGE9ITA7bT9FYSgpOihoLm5vRlNJbml0fHxWYXx8KFZhPSEwLFdhKCIvZGV2L3R0eSIsIi9kZXYvc3RkaW4iKSxXYSgiL2Rldi90dHkiLCIvZGV2L3N0ZG91dCIpLFdhKCIvZGV2L3R0eTEiLCIvZGV2L3N0ZGVyciIpLFhhKCIvZGV2L3N0ZGluIiwwKSxYYSgiL2Rldi9zdGRvdXQiLDEpLFhhKCIvZGV2L3N0ZGVyciIsMSkpLEQuRSgpLFlhPSExKX1mdW5jdGlvbiBaYShhKXthPWBBYm9ydGVkKCR7YX0pYDt1KGEpO3phPSEwO2E9bmV3IFdlYkFzc2VtYmx5LlJ1bnRpbWVFcnJvcihhKyIuIEJ1aWxkIHdpdGggLXNBU1NFUlRJT05TIGZvciBtb3JlIGluZm8uIik7Q2E/LihhKTt0aHJvdyBhO312YXIgJGE7CmFzeW5jIGZ1bmN0aW9uIGFiKGEpe3RyeXt2YXIgYj1hd2FpdCByYShhKTtyZXR1cm4gbmV3IFVpbnQ4QXJyYXkoYil9Y2F0Y2h7fWlmKHNhKWE9c2EoYSk7ZWxzZSB0aHJvdyJib3RoIGFzeW5jIGFuZCBzeW5jIGZldGNoaW5nIG9mIHRoZSB3YXNtIGZhaWxlZCI7cmV0dXJuIGF9YXN5bmMgZnVuY3Rpb24gYmIoYSxiKXt0cnl7dmFyIGM9YXdhaXQgYWIoYSk7cmV0dXJuIGF3YWl0IFdlYkFzc2VtYmx5Lmluc3RhbnRpYXRlKGMsYil9Y2F0Y2goZCl7dShgZmFpbGVkIHRvIGFzeW5jaHJvbm91c2x5IHByZXBhcmUgd2FzbTogJHtkfWApLFphKGQpfX0KYXN5bmMgZnVuY3Rpb24gY2IoYSl7dmFyIGI9JGE7aWYoIWwpdHJ5e3ZhciBjPWZldGNoKGIse2NyZWRlbnRpYWxzOiJzYW1lLW9yaWdpbiJ9KTtyZXR1cm4gYXdhaXQgV2ViQXNzZW1ibHkuaW5zdGFudGlhdGVTdHJlYW1pbmcoYyxhKX1jYXRjaChkKXt1KGB3YXNtIHN0cmVhbWluZyBjb21waWxlIGZhaWxlZDogJHtkfWApLHUoImZhbGxpbmcgYmFjayB0byBBcnJheUJ1ZmZlciBpbnN0YW50aWF0aW9uIil9cmV0dXJuIGJiKGIsYSl9ZnVuY3Rpb24gZGIoKXtlYj17QzpmYixoOmdiLHk6aGIsezppYixuOmpiLGw6a2IsQjpsYixmOm1iLHA6bmIsaTpvYixrOkxhLGo6cGIscTpxYixyOnJiLEQ6c2IsZTp0YixtOnViLGM6dmIsZDp3YixBOnhiLHY6eWIsczp6Yix0OkFiLGI6QmIsZzpDYix4OkRiLHU6RWIsdzpGYixhOngsbzpHYn07cmV0dXJue2E6ZWJ9fQphc3luYyBmdW5jdGlvbiBHYSgpe2Z1bmN0aW9uIGEoZCxlKXtEPWQuZXhwb3J0cztIYi5wdXNoKEQuSyk7ZD1EO2guX19aMTBqc19nZXRsaW5ldj1kLkY7aC5fbWFpbj1kLkc7bGE9aC5fdWNpPWQuSDtqYT1oLl9zZXRObnVlQnVmZmVyPWQuSTtoYT1oLl9nZXRSZWNvbW1lbmRlZE5udWU9ZC5KO0c9ZC5MO0liPWguX19lbXNjcmlwdGVuc19wcm94eV9tYWluPWQuTTtKYj1kLk87SmE9ZC5QO0tiPWQuUTtPYT1kLlI7TGI9ZC5TO2lhPWguX21hbGxvYz1kLlQ7TWI9ZC5VO05iPWQuVjtPYj1kLlc7UGI9ZC5YO1FiPWQuWTtSYj1kLlo7U2I9ZC5fO1RiPWQuJDtVYj1kLmFhO1ZiPWQuYmE7V2I9ZC5OO3Y9ZTtyZXR1cm4gRH12YXIgYj1kYigpO2lmKGguaW5zdGFudGlhdGVXYXNtKXJldHVybiBuZXcgUHJvbWlzZShkPT57aC5pbnN0YW50aWF0ZVdhc20oYixlLGYpPT57ZChhKGUsZikpfSl9KTtpZihteyl7dmFyIGM9bmV3IFdlYkFzc2VtYmx5Lkluc3RhbmNlKHYsZGIgpO3JldHVybiBhKGMsCnYpfSQkYT89PGgubG9jYXRlRmlsZT9oLmxvY2F0ZUZpbGU/aC5sb2NhdGVGaWxlKCJzZl8xOV9zbWFsbG5ldC53YXNtIixxYSk6cWEraC5sb2NhdGVGaWxlKCJzZl8xOV9zbWFsbG5ldC53YXNtIik6KHQubG9jYXRlRmlsZT90LmxvY2F0ZUZpbGUoInNmXzE5X3NtYWxsbmV0Lndhc20iLHEpOnRhKyJzZl8xOV9zbWFsbG5ldC53YXNtIik7cmV0dXJuIGZ1bmN0aW9uKHQpe3JldHVybiBhKHQuaW5zdGFuY2UsdC5tb2R1bGUpfShhd2FpdCBjYihiKSl9fWNsYXNzIFhie25hbWU9IkV4aXRTdGF0dXMiO2NvbnN0cnVjdG9yKGEpe3RoaXMubWVzc2FnZT1gUHJvZ3JhbSB0ZXJtaW5hdGVkIHdpdGggZXhpdCgke2F9KWA7dGhpcy5zdGF0dXM9YX19CnZhciBSYSxBLEMseSxUYSxCLFNhLFliPWE9PnthLnRlcm1pbmF0ZSgpO2Eub25tZXNzYWdlPSgpPT57fX0sWmI9W10sYWM9YT0+e2lmKDA9PUgubGVuZ3RoKXtpZihoLm1haW5TY3JpcHRVcmxPckJsb2Ipe3ZhciBiPWgubWFpblNjcmlwdFVybE9yQmxvYjsic3RyaW5nIiE9dHlwZW9mIGImJihiPVVSTC5jcmVhdGVPYmplY3RVUkwoYikpO2I9bmV3IFdvcmtlcihiLHt0eXBlOiJtb2R1bGUiLHdvcmtlckRhdGE6ImVtLXB0aHJlYWQiLG5hbWU6ImVtLXB0aHJlYWQifSl9ZWxzZSBiPW5ldyBXb3JrZXIobmV3IFVSTCgic2ZfMTlfc21hbGxuZXQuanMiLGltcG9ydC5tZXRhLnVybCkse3R5cGU6Im1vZHVsZSIsd29ya2VyRGF0YToiZW0tcHRocmVhZCIsbmFtZToiZW0tcHRocmVhZCJ9KTtILnB1c2goYik7JGIoKX1iPUgucG9wKCk7aWYoIWIpcmV0dXJuIDY7SS5wdXNoKGIpO0pbYS5rYV09YjtiLmthPWEua2E7dmFyIGM9e2hhOiJydW4iLFRhOmEuU2EsdmE6YS52YSwKa2E6YS5rYX07bCYmYi51bnJlZigpO2IucG9zdE1lc3NhZ2UoYyxhLklhKTtyZXR1cm4gMH0sSz0wLHliPSgpPT4wPEssTD0oYSxiLC4uLmMpPT57dmFyIGQ9MTYqYy5sZW5ndGgsZT1WYigpLGY9VWIoZCksZz1mPj4zLG47Zm9yKG4gb2YgYykiYmlnaW50Ij09dHlwZW9mIG4/KChxKCksQylbZysrXT0xbiwocSgpLEMpW2crK109bik6KChxKCksQylbZysrXT0wbiwocSgpLFRhKVtnKytdPW4pO2E9TmIoYSwwLGQsZixiKTtUYihlKTtyZXR1cm4gYX07ZnVuY3Rpb24gR2IoYSl7aWYobSlyZXR1cm4gTCgwLDEsYSk7dz1hOzA8S3x8KGJjKCksaC5vbkV4aXQ/LihhKSx6YT0hMCk7b2EoYSxuZXcgWGIoYSkpfWZ1bmN0aW9uIGNjKGEpe2lmKG0pcmV0dXJuIEwoMSwwLGEpOy0tSztCYihhKX0KdmFyIEJiPWE9Pnt3PWE7aWYobSlyZXR1cm4gTCgwLDEsYSk7aWYoIWwpdHJ5e3ZhciBjPWZldGNoKGIse2NyZWRlbnRpYWxzOiJzYW1lLW9yaWdpbiJ9KTtyZXR1cm4gYXdhaXQgV2ViQXNzZW1ibHkuaW5zdGFudGlhdGVTdHJlYW1pbmcoYyxhKX1jYXRjaChkKXt1KGB3YXNtIHN0cmVhbWluZyBjb21waWxlIGZhaWxlZDogJHtkfWApLHUoImZhbGxpbmcgYmFjayB0byBBcnJheUJ1ZmZlciBpbnN0YW50aWF0aW9uIil9cmV0dXJuIGJiKGIsYSl9ZnVuY3Rpb24gS2EoKXtIRi5mb3JFYWNoKGE9PmEoKSl9CnZhciAkYj0oKSA9Pnt2YXIgYT1IWzBdO25ldyBQcm9taXNlKGI9PnthLm9ubWVzc2FnZT1mPT57dmFyIGc9Zi5kYXRhO2Y9Zy5oYTtpZihnLnVhJiZnLnVhIT1HKCkpe3ZhciBuPUpbZy51YV07bj9uLnBvc3RNZXNzYWdlKGcsZy5JYSk6dShgd29ya2VyIHNlbnQgbWVzc2FnZSAoJHtmfSkgdG8gcHRocmVhZCAoJHtnLnVhfSkgdGhhdCBubyBsb25nZXIgZXhpc3RzYCl9ZWxzZSBpZigiY2hlY2tNYWlsYm94Ij09PWYpTmEoKTtlbHNlIGlmKCJzcGF3blRocmVhZCI9PT1mKWFjKGcpO2Vsc2UgaWYoImNsZWFudXBUaHJlYWQiPT09ZilnYygoKT0+e2ZjKEpbZy5VYV0pfSk7ZWxzZSBpZigibG9hZGVkIj09PWYpYS5sb2FkZWQ9ITAsYihhKTtlbHNlIGlmKCJzZXRpbW1lZGlhdGUiPT09Zy50YXJnZXQpYS5wb3N0TWVzc2FnZShnKTtlbHNlIGlmKCJ1bmNhdWdodEV4Y2VwdGlvbiI9PT1mKWEub25lcnJvcihnLmVycm9yKTtlbHNlIGlmKCJjYWxsSGFuZGxlciI9PT1mKWhbZy5LYV0oLi4uZy5hcmdzKTsKZWxzZSBmJiZ1KGB3b3JrZXIgc2VudCBhbiB1bmtub3duIGNvbW1hbmQgJHtmfWApfTthLm9uZXJyb3I9Zj0+e3UoYCR7IndvcmtlciBzZW50IGFuIGVycm9yISJ9ICR7Zi5maWxlbmFtZX06JHtmLmxpbmVub306ICR7Zi5tZXNzYWdlfWApO3Rocm93IGY7fTtsJiYoYS5vbigibWVzc2FnZSIsZj0+YS5vbm1lc3NhZ2Uoe2RhdGE6Zn0pKSxhLm9uKCJlcnJvciIsZj0+YS5vbmVycm9yKGYpKSk7dmFyIGM9W10sZD1bIm9uRXhpdCIsInByaW50IiwicHJpbnRFcnIiXSxlO2ZvcihlIG9mIGQpaC5wcm9wZXJ0eUlzRW51bWVyYWJsZShlKSYmYy5wdXNoKGUpO2EucG9zdE1lc3NhZ2Uoe2hhOiJsb2FkIixMYTpjLFdhOngsWGE6dn0pfSl9O2Z1bmN0aW9uIElhKGEpe3ZhciBiPShxKCksQilbYSs0OD4+Ml07YT0ocSgpLEIpW2ErNTI+PjJdO1NiKGIsYi1hKTtUYihiKX0KdmFyIGhjPVtdLE1hPShhLGIpPT57Sz0wO3ZhciBjPWhjW2FdO2N8fChoY1thXT1jPVdiLmdldChhKSk7YT1jKGIpOzA8Sz93PWE6UGIoYSl9LHg7ZnVuY3Rpb24gaWMoYSxiLGMsZCl7cmV0dXJuIG0/TCgyLDEsYSxiLGMsZCk6ZmIoYSxiLGMsZCl9CnZhciBmYj0oYSxiLGMsZCk9PntpZighZ2xvYmFsVGhpcy5TaGFyZWRBcnJheUJ1ZmZlcilyZXR1cm4gNjt2YXIgZT1bXTtpZihtJiYwPT09ZS5sZW5ndGgpcmV0dXJuIGljKGEsYixjLGQpO2E9e1NhOmMsa2E6YSx2YTpkLElhOmV9O3JldHVybiBtPyhhLmhhPSJzcGF3blRocmVhZCIscG9zdE1lc3NhZ2UoYSxlKSwwKTphYyhhKX0sUT0oKT0+e3ZhciBhPShxKCksQSlbK1A+PjJdO1ArPTQ7cmV0dXJuIGF9LGpcPShhLGIpPT57Zm9yKHZhciBjPTAsZD1hLmxlbmd0aC0xOzA8PWQ7ZC0tKXt2YXIgZT1hW2RdOyIuIj09PWU/YS5zcGxpY2UoZCwxKToiLi4iPT09ZT8oYS5zcGxpY2UoZCwxKSxjKyspOmMmJihhLnNwbGljZShkLDEpLGMtLSl9aWYoYilmb3IoO2M7Yy0tKWEudW5zaGlmdCgiLi4iKTtyZXR1cm4gYX0sa2M9YT0+e3ZhciBiPSIvIj09PWEuY2hhckF0KDApLGM9Ii8iPT09YS5zbGljZSgtMSk7KGE9amMoYS5zcGxpdCgiLyIpLmZpbHRlcihkPT4hIWQpLCFiKS5qb2luKCIvIikpfHxiJiYoYT0iLiIpO3JldHVybihiPyIvIjoiIikrYX0sbGM9YS0+eyA=";
+const SF19_SMALLNET_WASM_B64 = "AGFzbQEAAAABjwREYAF/AGABfwF/YAJ/fwBgAn9/AX9gA39/fwF/YAN/f38AYAZ/f39/f38Bf2AEf39/fwF/YAV/f39/fwF/YAV/f39/fwBgBH9/f38AYAAAYAh/f39/f39/fwF/YAZ/f39/f38AYAd/f39/f39/AX9gB39/f39/f38AYAABf2AFf35+fn4AYAV/f39/";
 const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-installs";
 
     // ─── Local Engine Registry ──
@@ -1422,99 +1422,61 @@ self.onmessage = function(e) {
     }
 
     function buildEs6ModuleEngine(jsCode, wasmBytes) {
-        // ES6 module worker: uses import and type: 'module'
-        // The JS code must be an ES module (has export/import)
+        // ES6 module worker for lichess SF19 smallnet
+        // The JS module exports a default factory function that returns a Promise<StockfishWeb>
+        // StockfishWeb interface: { uci, listen, onError, setNnueBuffer, getRecommendedNnue }
+        
         const wasmB64 = wasmBytes ? btoa(String.fromCharCode(...new Uint8Array(wasmBytes))) : (SF19_SMALLNET_WASM_B64 || null);
         const jsB64 = SF19_SMALLNET_JS_B64 || null;
         
-        // Determine the expected WASM filename from the JS code
-        const wasmUrlMatch = jsCode ? jsCode.match(/['"]([^'"]+\.wasm)['"]/) : null;
-        const expectedWasmName = wasmUrlMatch ? wasmUrlMatch[1] : 'sf_19_smallnet.wasm';
+        // Create blob URLs for both JS and WASM
+        const jsBlob = jsB64 ? new Blob([atob(jsB64)], { type: "application/javascript" }) : null;
+        const wasmBlob = wasmB64 ? new Blob([Uint8Array.from(atob(wasmB64), c => c.charCodeAt(0))], { type: "application/wasm" }) : null;
+        const jsBlobUrl = jsBlob ? URL.createObjectURL(jsBlob) : jsCode;
+        const wasmBlobUrl = wasmBlob ? URL.createObjectURL(wasmBlob) : null;
         
         const moduleLoader = `
-            // ES6 Module Stockfish Loader (SF19 Smallnet)
-            ${jsB64 ? `import { default: StockfishFactory } from 'data:text/javascript;base64,${jsB64}';` : `import { default: StockfishFactory } from '${jsCode}';`}
+            // ES6 Module Stockfish Loader (SF19 Smallnet from lichess stockfish-web)
+            import createStockfish from '${jsBlobUrl}';
             
-            let stockfish = null;
-            let wasmModuleLoaded = false;
+            let engine = null;
             
-            // Override fetch for WASM if embedded
-            ${wasmB64 ? `
-            const wasmBase64 = '${wasmB64}';
-            const wasmBytes = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0));
-            const originalFetch = self.fetch;
-            self.fetch = async (url, opts) => {
-                const urlStr = String(url);
-                // Intercept WASM loads - check multiple patterns
-                if (urlStr.endsWith('.wasm') || 
-                    urlStr.includes('${expectedWasmName}') ||
-                    (urlStr.includes('stockfish') && urlStr.endsWith('.wasm'))) {
-                    return new Response(wasmBytes, { 
-                        headers: { 'Content-Type': 'application/wasm' } 
-                    });
+            // Create engine with custom locateFile for embedded WASM
+            const moduleArg = ${wasmBlobUrl ? `{ 
+                locateFile: (path, prefix) => {
+                    if (path.endsWith('.wasm')) return '${wasmBlobUrl}';
+                    return prefix + path;
                 }
-                return originalFetch(url, opts);
-            };
-            ` : ''}
-            
-            // UCI interface functions (matching lichess initModule.js)
-            self.uci = function(command) {
-                if (!stockfish) return;
-                const sz = lengthBytesUTF8(command) + 1;
-                const utf8 = _malloc(sz);
-                if (!utf8) throw new Error('Could not allocate ' + sz + ' bytes');
-                stringToUTF8(command, utf8, sz);
-                _uci(utf8);
-            };
-            
-            self.getRecommendedNnue = function(index) {
-                if (!stockfish) return undefined;
-                return UTF8ToString(_getRecommendedNnue(index)) || undefined;
-            };
-            
-            self.setNnueBuffer = function(buf, index) {
-                if (!stockfish || !buf || buf.byteLength <= 0) return;
-                const heapBuf = _malloc(buf.byteLength);
-                if (!heapBuf) throw new Error('could not allocate ' + buf.byteLength + ' bytes');
-                if (typeof growMemViews === 'function') growMemViews();
-                HEAPU8.set(buf, heapBuf);
-                _setNnueBuffer(heapBuf, buf.byteLength, index || 0);
-            };
-            
-            self.print = function(text) {
-                self.listen?.(text);
-                if (text && (text.startsWith('info ') || text.startsWith('bestmove') || 
-                    text.startsWith('uciok') || text.startsWith('readyok'))) {
-                    self.postMessage({ type: 'uci', text: text });
-                }
-            };
-            
-            self.printErr = function(text) {
-                self.onError?.(text);
-                console.error('[SF Engine]', text);
-            };
+            }` : '{}'};
             
             // Initialize Stockfish
-            StockfishFactory().then(instance => {
-                stockfish = instance;
-                // Set default EvalFile for embedded smallnet (SF19 smallnet uses single network)
-                if (stockfish.uci) {
-                    // The embedded smallnet network name - check what SF19 smallnet uses
-                    // SF19 smallnet typically uses nn-<sha256-12>.nnue format
-                    stockfish.uci('setoption name EvalFile value nn-37f18f62d772.nnue');
-                }
+            createStockfish(moduleArg).then(instance => {
+                engine = instance;
+                
+                // Forward UCI output to main thread
+                engine.listen = (line) => {
+                    self.postMessage({ type: 'uci', text: line });
+                };
+                
+                // Forward errors
+                engine.onError = (msg) => {
+                    self.postMessage({ type: 'error', text: msg });
+                };
+                
+                // SF19 smallnet has embedded NNUE - no need to call setNnueBuffer
+                // The smallnet build includes the net in the WASM binary
+                
                 self.postMessage({ type: 'ready', engine: 'Stockfish 19 Smallnet' });
-                wasmModuleLoaded = true;
             }).catch(err => {
-                self.postMessage({ type: 'error', text: 'Failed to init Stockfish: ' + err });
+                self.postMessage({ type: 'error', text: 'Failed to init Stockfish 19 Smallnet: ' + err });
             });
             
-            // Handle UCI commands
+            // Handle UCI commands from main thread
             self.onmessage = (e) => {
                 const cmd = e.data;
-                if (cmd.type === 'uci' && cmd.cmd && stockfish) {
-                    stockfish.uci(cmd.cmd);
-                } else if (cmd.type === 'init') {
+                if (cmd.type === 'uci' && cmd.cmd && engine) {
+                    engine.uci(cmd.cmd);
+                } else if (cmd.type === 'init' && engine) {
                     self.postMessage({ type: 'ready', engine: 'Stockfish 19 Smallnet' });
                 }
             };
@@ -1524,6 +1486,13 @@ self.onmessage = function(e) {
         
         const blob = new Blob([moduleLoader], { type: "application/javascript" });
         const worker = new Worker(URL.createObjectURL(blob), { type: 'module' });
+        
+        // Clean up blob URLs when worker terminates
+        worker.addEventListener('message', () => {
+            if (jsBlob) URL.revokeObjectURL(jsBlobUrl);
+            if (wasmBlob) URL.revokeObjectURL(wasmBlobUrl);
+        });
+        
         return worker;
     }
 
