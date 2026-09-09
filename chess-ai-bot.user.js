@@ -1435,6 +1435,10 @@ self.onmessage = function(e) {
         const jsBlobUrl = jsBlob ? URL.createObjectURL(jsBlob) : jsCode;
         const wasmBlobUrl = wasmBlob ? URL.createObjectURL(wasmBlob) : null;
         
+        const moduleArgStr = wasmBlobUrl 
+            ? `{ locateFile: (path, prefix) => { if (path.endsWith('.wasm')) return '${wasmBlobUrl}'; return prefix + path; } }` 
+            : '{}';
+
         const moduleLoader = `
             // ES6 Module Stockfish Loader (SF19 Smallnet from lichess stockfish-web)
             import createStockfish from '${jsBlobUrl}';
@@ -1442,12 +1446,7 @@ self.onmessage = function(e) {
             let engine = null;
             
             // Create engine with custom locateFile for embedded WASM
-            const moduleArg = ${wasmBlobUrl ? `{ 
-                locateFile: (path, prefix) => {
-                    if (path.endsWith('.wasm')) return '${wasmBlobUrl}';
-                    return prefix + path;
-                }
-            }` : '{}'};
+            const moduleArg = ${moduleArgStr};
             
             // Initialize Stockfish
             createStockfish(moduleArg).then(instance => {
@@ -1487,11 +1486,11 @@ self.onmessage = function(e) {
         const blob = new Blob([moduleLoader], { type: "application/javascript" });
         const worker = new Worker(URL.createObjectURL(blob), { type: 'module' });
         
-        // Clean up blob URLs when worker terminates
-        worker.addEventListener('message', () => {
+        // Clean up blob URLs when worker is terminated (not on every message)
+        worker.onerror = () => {
             if (jsBlob) URL.revokeObjectURL(jsBlobUrl);
             if (wasmBlob) URL.revokeObjectURL(wasmBlobUrl);
-        });
+        };
         
         return worker;
     }
