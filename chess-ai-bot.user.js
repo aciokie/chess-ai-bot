@@ -316,7 +316,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         menuOpacity: 0.9,
         debugLogs: !1,
         menuPosition: "top-right",
-        localModelId: "sf18_05",
+        localModelId: "sf19_smallnet",
         // Per-model settings are stored under "m_<modelId>_<key>" via GM_setValue.
         // These flat keys are only used as in-memory working copies (loaded on model select).
         localHashMB: 64,
@@ -393,7 +393,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
 
     // Save a per-model setting for the given (or current) model
     function saveModelSetting(key, val, modelId) {
-        const mid = modelId || settings.localModelId || "sf18_05";
+        const mid = modelId || settings.localModelId || "sf19_smallnet";
         settings[key] = val;
         GM_setValue(`m_${mid}_${key}`, val);
     }
@@ -422,7 +422,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         });
         settings.engineMode = "local";
         // Load per-model settings for the active model
-        loadModelSettings(settings.localModelId || "sf18_05");
+        loadModelSettings(settings.localModelId || "sf19_smallnet");
     }
     // --- UTILITIES ---
     const getRandomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
@@ -1615,7 +1615,7 @@ self.onmessage = function(e) {
         const fullError = `[${errorType}] ${msg} at ${filename}:${lineno}:${colno}. Suggestion: ${suggestion}`;
         console.error(`[SF Engine] Worker error: ${fullError}`);
         console.error(`[SF Engine] Stack: ${stack}`);
-        const currentModel = getEngineById(settings.localModelId || "sf18_05");
+        const currentModel = getEngineById(settings.localModelId || "sf19_smallnet");
         console.error(`[SF Engine] Context: engineStatus=${state.engineStatus}, model=${currentModel.label}, hasCache=${!!state.localEngine}`);
 
         handleError(`Engine Worker Error (${errorType})`, e);
@@ -1733,7 +1733,7 @@ self.onmessage = function(e) {
         console.log(`[SF Engine] loadLocalEngine START`);
         state.engineLoadingInProgress = true;
         state.isThinking = false;
-        const modelId = settings.localModelId || "sf18_05";
+        const modelId = settings.localModelId || "sf19_smallnet";
         const m = getEngineById(modelId);
         const label = m.format === "asmjs" ? `${m.label} (asm.js)` : m.label;
         console.log(`[SF Engine] Loading model: ${label} (id=${modelId}, format=${m.format})`);
@@ -2433,7 +2433,7 @@ function analyzeLocal(fen, depth, wasThinking = false) {
                     state.pendingReadyProbe = false;
                     state.engineRetryAt = 0;
                     if (state.engineStatus !== "ready") {
-                        const m = getEngineById(settings.localModelId || "sf18_05");
+                        const m = getEngineById(settings.localModelId || "sf19_smallnet");
                         setEngineStatus("ready", "");
                         state.lastMoveResult = `✅ ${m.label} ready.`;
                         updateUI();
@@ -2452,7 +2452,7 @@ function analyzeLocal(fen, depth, wasThinking = false) {
                     console.log(`[SF Engine] Received readyok`);
                     state.pendingReadyProbe = false;
                     if (state.engineStatus !== "ready") {
-                        const m = getEngineById(settings.localModelId || "sf18_05");
+                        const m = getEngineById(settings.localModelId || "sf19_smallnet");
                         setEngineStatus("ready", "");
                         state.lastMoveResult = `✅ ${m.label} ready.`;
                         updateUI();
@@ -2532,7 +2532,7 @@ function analyzeLocal(fen, depth, wasThinking = false) {
             state.pendingReadyProbe = false;
             state.engineRetryAt = 0;
             if (state.engineStatus !== "ready") {
-                const m = getEngineById(settings.localModelId || "sf18_05");
+                const m = getEngineById(settings.localModelId || "sf19_smallnet");
                 setEngineStatus("ready", "");
                 state.lastMoveResult = `✅ ${m.label} ready.`;
                 updateUI();
@@ -2550,7 +2550,7 @@ function analyzeLocal(fen, depth, wasThinking = false) {
             console.log(`[SF Engine] Received readyok`);
             state.pendingReadyProbe = false;
             if (state.engineStatus !== "ready") {
-                const m = getEngineById(settings.localModelId || "sf18_05");
+                const m = getEngineById(settings.localModelId || "sf19_smallnet");
                 setEngineStatus("ready", "");
                 state.lastMoveResult = `✅ ${m.label} ready.`;
                 updateUI();
@@ -3068,7 +3068,7 @@ function triggerAutoMove(fen = null) {
         const btnUninstall = document.getElementById("btnLocalUninstall");
         if (!statusEl) return;
 
-        const m = getEngineById(settings.localModelId || "sf18_05");
+        const m = getEngineById(settings.localModelId || "sf19_smallnet");
 
         // ── Status badge ──
         const statusMap = {
@@ -4526,7 +4526,7 @@ pvSettings: document.getElementById("pvSettings"),
         document.body.classList.add(`mode-${settings.engineMode}`);
         if (state.ui.debugArea) state.ui.debugArea.style.display = settings.debugLogs ? "flex" : "none";
         let maxD = 18;
-        if (settings.engineMode === "local") maxD = getEngineById(settings.localModelId || "sf18_05").maxDepth;
+        if (settings.engineMode === "local") maxD = getEngineById(settings.localModelId || "sf19_smallnet").maxDepth;
         else if (settings.engineMode === "sfonline") maxD = 15;
         if (state.ui.lblMaxDepth) state.ui.lblMaxDepth.innerText = maxD;
         if (state.ui.inpDepth) state.ui.inpDepth.max = maxD;
