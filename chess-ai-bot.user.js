@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.6
+// @version          11.13.7
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -73,6 +73,75 @@ function bytesToBase64(bytes) {
         result += String.fromCharCode.apply(null, chunk);
     }
     return btoa(result);
+}
+
+// ─── COMPREHENSIVE ERROR REPORTING ───
+// Call this from ANY catch block to get a detailed console report
+function reportError(context, err, extra = {}) {
+    const timestamp = new Date().toISOString();
+    const errMsg = err?.message || String(err);
+    const errStack = err?.stack || "no stack";
+    const errName = err?.name || "Error";
+    const errCause = err?.cause ? String(err.cause) : "none";
+
+    console.group(`%c[SF Engine] ❌ ERROR in ${context}`, "color: #ff4444; font-weight: bold; font-size: 12px;");
+    console.error(`%cTimestamp:`, "font-weight: bold;", timestamp);
+    console.error(`%cContext:`, "font-weight: bold;", context);
+    console.error(`%cError Name:`, "font-weight: bold;", errName);
+    console.error(`%cError Message:`, "font-weight: bold;", errMsg);
+    console.error(`%cError Cause:`, "font-weight: bold;", errCause);
+    console.error(`%cStack Trace:`, "font-weight: bold;", errStack);
+    
+    // Engine state
+    console.error(`%c--- Engine State ---`, "font-weight: bold; color: #ffaa00;");
+    console.error(`%cengineStatus:`, "font-weight: bold;", state?.engineStatus);
+    console.error(`%cisThinking:`, "font-weight: bold;", state?.isThinking);
+    console.error(`%chasEngine:`, "font-weight: bold;", !!state?.localEngine);
+    console.error(`%clocalModelId:`, "font-weight: bold;", state?.localModelId);
+    console.error(`%clastSentFEN:`, "font-weight: bold;", state?.lastSentFEN);
+    console.error(`%ccurrentBestMove:`, "font-weight: bold;", state?.currentBestMove);
+    console.error(`%cengineBuildTime:`, "font-weight: bold;", state?.engineBuildTime);
+    console.error(`%cpendingReadyProbe:`, "font-weight: bold;", state?.pendingReadyProbe);
+    console.error(`%cheartbeatMisses:`, "font-weight: bold;", state?.heartbeatMisses);
+
+    // Model info
+    const m = state ? getEngineById(state.localModelId) : null;
+    if (m) {
+        console.error(`%c--- Model Info ---`, "font-weight: bold; color: #ffaa00;");
+        console.error(`%clabel:`, "font-weight: bold;", m.label);
+        console.error(`%cformat:`, "font-weight: bold;", m.format);
+        console.error(`%chash:`, "font-weight: bold;", m.hasHash);
+        console.error(`%cnnue:`, "font-weight: bold;", m.hasNNUE);
+        console.error(`%cslowMover:`, "font-weight: bold;", m.hasSlowMover);
+    }
+
+    // Extra context passed by caller
+    if (Object.keys(extra).length > 0) {
+        console.error(`%c--- Extra Context ---`, "font-weight: bold; color: #ffaa00;");
+        Object.entries(extra).forEach(([k, v]) => {
+            console.error(`%c${k}:`, "font-weight: bold;", v);
+        });
+    }
+
+    // Browser/environment info
+    console.error(`%c--- Environment ---`, "font-weight: bold; color: #ffaa00;");
+    console.error(`%cuserAgent:`, "font-weight: bold;", navigator.userAgent);
+    console.error(`%clocation:`, "font-weight: bold;", window.location.href);
+    console.error(`%cGM_info:`, "font-weight: bold;", typeof GM_info !== "undefined" ? GM_info : "not available");
+    console.error(`%cViolentmonkey/Tampermonkey:`, "font-weight: bold;", typeof GM_info !== "undefined" && GM_info.scriptHandler ? GM_info.scriptHandler : "unknown");
+
+    console.groupEnd();
+    
+    // Also log a one-line summary for quick scanning
+    console.error(`[SF Engine] 💥 ${context} → ${errName}: ${errMsg}`);
+}
+
+// Convenience wrapper for async functions
+function reportErrorAsync(context, promise, extra = {}) {
+    return promise.catch(err => {
+        reportError(context, err, extra);
+        throw err; // re-throw to preserve promise chain
+    });
 }
 
     // ─── Local Engine Registry ──
@@ -496,7 +565,9 @@ const getMoveWinPct = (cp, mate) => {
             if (typeof state.board.game.getFEN === "function") return state.board.game.getFEN();
             if (typeof state.board.game.fen === "string") return state.board.game.fen;
             if (state.board.game.getPosition) return state.board.game.getPosition();
-        } catch (e) {}
+        } catch (e) {
+            reportError("Platform.getFEN", e);
+        }
         return null;
     }
     function sanitizeFEN(rawFEN) {
@@ -1577,7 +1648,7 @@ self.onmessage = function(e) {
                     stopHeartbeat();
                     const errMsg = `Engine worker unresponsive (${elapsed}s, 2 missed heartbeats). Model: ${m.label} (${modelId}). Check: 1) blob wasm URL fetch working? 2) CSP blocking worker? 3) JS parse error in worker?`;
                     console.error(`[SF Engine] ${errMsg}`);
-                    try { state.localEngine.terminate(); } catch (e) { console.error(`[SF Engine] Error terminating worker:`, e); }
+                    try { state.localEngine.terminate(); } catch (e) { reportError("terminate worker on heartbeat fail", e); }
                     state.localEngine = null;
                     setEngineStatus("error", errMsg);
                     updateUI();
@@ -1594,7 +1665,7 @@ self.onmessage = function(e) {
                 } else {
                     state.localEngine.postMessage("isready");
                 }
-            } catch (e) { console.error(`[SF Engine] heartbeat postMessage failed:`, e); }
+            } catch (e) { reportError("heartbeat postMessage", e); }
             state.pendingReadyProbe = true;
         }, 15000);
     }
@@ -1636,6 +1707,16 @@ self.onmessage = function(e) {
         console.error(`[SF Engine] Stack: ${stack}`);
         const currentModel = getEngineById(settings.localModelId || "sf19_smallnet");
         console.error(`[SF Engine] Context: engineStatus=${state.engineStatus}, model=${currentModel.label}, hasCache=${!!state.localEngine}`);
+
+        // Comprehensive error report
+        reportError(`Engine Worker Error (${errorType})`, e, {
+            errorType,
+            suggestion,
+            filename,
+            lineno,
+            colno,
+            fullError
+        });
 
         handleError(`Engine Worker Error (${errorType})`, e);
         setEngineStatus("error", `${errorType}: ${msg}`);
@@ -1800,7 +1881,7 @@ self.onmessage = function(e) {
                         console.log(`[SF Engine] asm.js worker created, finalizing...`);
                         finalizeEngine(modelId);
                     } catch (e) {
-                        console.error(`[SF Engine] Failed to build asm.js worker:`, e);
+                        reportError("build asm.js worker", e, { modelId, format: "asmjs" });
                         state.engineLoadingInProgress = false;
                         setEngineStatus("error", e.message || "Build failed");
                     }
@@ -1850,7 +1931,7 @@ self.onmessage = function(e) {
                         console.log(`[SF Engine] ES6 module worker created, finalizing...`);
                         finalizeEngine(modelId);
                     } catch (e) {
-                        console.error(`[SF Engine] Failed to build ES6 module worker:`, e);
+                        reportError("build ES6 module worker", e, { modelId, format: "es6-module" });
                         state.engineLoadingInProgress = false;
                         setEngineStatus("error", e.message || "Build failed");
                     }
@@ -1959,7 +2040,7 @@ self.onmessage = function(e) {
 
                         finalizeEngine(modelId);
                     } catch (e) {
-                        console.error(`[SF Engine] Failed to build WASM worker:`, e);
+                        reportError("build WASM worker", e, { modelId, format: "wasm-patched" });
                         state.engineLoadingInProgress = false;
                         setEngineStatus("error", e.message || "Build failed");
                     }
@@ -2289,7 +2370,7 @@ self.onmessage = function(e) {
             else if (settings.engineMode === "sfonline") analyzeSF16(finalFEN, depth);
             else analyzeLocal(finalFEN, depth, wasThinking);
         } catch (e) {
-            console.error(`[SF Engine] analyze dispatch failed:`, e);
+            reportError("analyze dispatch", e, { engineMode: settings.engineMode, fen: finalFEN, depth });
             handleError("Analyze failed", e);
         }
     }
@@ -2339,7 +2420,7 @@ self.onmessage = function(e) {
             const contRaw = data.continuation;
             const cont = Array.isArray(contRaw) ? contRaw : (typeof contRaw === "string" ? contRaw.trim().split(/\s+/) : null);
             processBestMove(bestMove, data.evaluation, data.mate, cont, null, duration, true, sentFEN);
-        } catch (e) { triggerFallback(); }
+        } catch (e) { reportError("handleSF16Response", e, { status: response.status, responseText: response.responseText?.substring(0, 200) }); triggerFallback(); }
         updateUI();
     }
     function handleCloudResponse(response, sentFEN, depth, isRetry) {
@@ -2363,7 +2444,7 @@ self.onmessage = function(e) {
                 const duration = ((performance.now() - state.analysisStartTime) / 1000).toFixed(2);
                 processBestMove(result.move || result.bestmove, result.eval, result.mate, result.continuationArr, result.winChance, duration, true, sentFEN);
             } else { triggerFallback(); }
-        } catch (e) { triggerFallback(); }
+        } catch (e) { reportError("handleCloudResponse", e, { status: response.status, isRetry, depth }); triggerFallback(); }
         updateUI();
     }
 function analyzeLocal(fen, depth, wasThinking = false) {
@@ -2949,8 +3030,10 @@ function analyzeLocal(fen, depth, wasThinking = false) {
             const turnNum = (turn === 1 || turn === "w" || turn === "white") ? 1 : 2;
             const paNum = (playingAs === 1 || playingAs === "w" || playingAs === "white") ? 1 : 2;
             return turnNum === paNum;
-        } catch(e) {}
-        return false;
+        } catch(e) {
+            reportError("isOurTurnNow", e);
+            return false;
+        }
     };
 
 function triggerAutoMove(fen = null) {
@@ -3026,6 +3109,8 @@ function triggerAutoMove(fen = null) {
         console.error(`[SF Engine] ${type}:`, err);
         console.error(`[SF Engine] Error stack:`, err?.stack);
         console.error(`[SF Engine] State at error: engineStatus=${state.engineStatus}, isThinking=${state.isThinking}, hasEngine=${!!state.localEngine}`);
+        // Comprehensive error report
+        reportError(`handleError: ${type}`, err);
         state.lastResponse = `${type}: ${err?.message || err}`;
         state.lastMoveResult = `❌ ${type}`;
         updateUI();
@@ -4595,7 +4680,7 @@ pvSettings: document.getElementById("pvSettings"),
             try {
                 const cs = getComputedStyle(node);
                 if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return false;
-            } catch (e) { return false; }
+            } catch (e) { reportError("isElVisible getComputedStyle", e, { node: node?.tagName }); return false; }
             node = node.parentElement;
         }
         return true;
@@ -4705,12 +4790,12 @@ pvSettings: document.getElementById("pvSettings"),
 
     function checkAndAnalyze() {
         state.board = document.querySelector(CONFIG.BOARD_SEL);
-        try { HighlightObserver.ensure(); } catch (e) { console.error(`[SF Engine] HighlightObserver failed:`, e); }
+        try { HighlightObserver.ensure(); } catch (e) { reportError("HighlightObserver.ensure", e); }
         if (settings.showEvalBar) {
             try {
                 EvalBar.create();
                 EvalBar.updatePosition();
-            } catch (e) { console.error(`[SF Engine] EvalBar create failed:`, e); }
+            } catch (e) { reportError("EvalBar.create/updatePosition", e); }
         }
 
         // Single FEN read shared by new-game detection + the analyze trigger
@@ -4737,7 +4822,7 @@ pvSettings: document.getElementById("pvSettings"),
                     ThreatDetector.clear();
                     EvalBar._lastPlayingAs = null;
                     EvalBar.reset();
-                } catch (e) { console.error(`[SF Engine] overlay cleanup failed:`, e); }
+                } catch (e) { reportError("overlay cleanup (hideAfterMove)", e); }
             }
             state.lastSeenFEN = clean;
             const tn = state.board.game.getTurn();
@@ -4753,7 +4838,7 @@ pvSettings: document.getElementById("pvSettings"),
                         try {
                             analyze(settings.depth);
                         } catch (e) {
-                            console.error(`[SF Engine] scheduled analyze failed:`, e);
+                            reportError("scheduled analyze", e, { depth: settings.depth, glanceMs });
                             handleError("Analyze failed", e);
                         }
                     }, glanceMs);
@@ -4762,7 +4847,7 @@ pvSettings: document.getElementById("pvSettings"),
         }
         if (!state.ui.panel) createUI();
         if (state.board?.game?.getPlayingAs) {
-            try { const pa = state.board.game.getPlayingAs(); if (pa === 1 || pa === 2) state.playingAs = pa; } catch (e) {}
+            try { const pa = state.board.game.getPlayingAs(); if (pa === 1 || pa === 2) state.playingAs = pa; } catch (e) { reportError("getPlayingAs in checkAndAnalyze", e); }
         }
         updateUI();
     }
@@ -4771,7 +4856,7 @@ pvSettings: document.getElementById("pvSettings"),
         const delay = getRandomInt(CONFIG.BACKUP_POLL_MIN_MS, CONFIG.BACKUP_POLL_MAX_MS);
         setTimeout(() => {
             try { checkAndAnalyze(); }
-            catch (e) { console.error(`[SF Engine] backup poll failed:`, e); }
+            catch (e) { reportError("backup poll (checkAndAnalyze)", e); }
             scheduleBackupPoll();
         }, delay);
     }
@@ -4781,7 +4866,7 @@ pvSettings: document.getElementById("pvSettings"),
         state.gameOverPollTimeout = setTimeout(() => {
             try {
                 if (settings.autoRematch) attemptRematch();
-            } catch (e) { console.error(`[SF Engine] game-over poll failed:`, e); }
+            } catch (e) { reportError("game-over poll (attemptRematch)", e); }
             startGameOverPoll();
         }, getRandomInt(2000, 4000));
     }
