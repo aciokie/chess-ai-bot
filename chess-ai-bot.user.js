@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.5
+// @version          11.13.6
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1329,7 +1329,14 @@ const getMoveWinPct = (cp, mate) => {
         }
         if (m.hasContempt) cmds.push(`setoption name Contempt value ${settings.localContempt}`);
         cmds.push("setoption name MultiPV value 1");
-        cmds.forEach(c => state.localEngine.postMessage(c));
+        const isEs6Module = m.format === "es6-module";
+        cmds.forEach(c => {
+            if (isEs6Module) {
+                state.localEngine.postMessage({ type: 'uci', cmd: c });
+            } else {
+                state.localEngine.postMessage(c);
+            }
+        });
         state.lastMultiPV = 1;
     }
 
@@ -1465,14 +1472,14 @@ self.onmessage = function(e) {
                 engine = instance;
                 
                 // Forward UCI output to main thread
-                engine.listen = (line) => {
+                engine.listen((line) => {
                     self.postMessage({ type: 'uci', text: line });
-                };
+                });
                 
                 // Forward errors
-                engine.onError = (msg) => {
+                engine.onError((msg) => {
                     self.postMessage({ type: 'error', text: msg });
-                };
+                });
                 
                 // SF19 smallnet has embedded NNUE - no need to call setNnueBuffer
                 // The smallnet build includes the net in the WASM binary
@@ -2475,6 +2482,109 @@ function analyzeLocal(fen, depth, wasThinking = false) {
                         state.pendingLocalFEN = null; state.pendingLocalDepth = null;
                         state.isThinking = !1;
                         analyzeLocal(fFEN, fDepth);
+                    }
+                    return;
+                }
+
+                // Handle bestmove from ES6 module worker
+                if (msgText.startsWith("bestmove")) {
+                    state.isThinking = !1;
+                    if ((state.pendingAbortEchoes || 0) > 0) {
+                        state.pendingAbortEchoes--;
+                        console.warn(`[SF Engine] dropped stale bestmove (aborted search echo, ${state.pendingAbortEchoes} remaining)`);
+                        state.lastSanitizedBoardFEN = "";
+                        updateUI();
+                        return;
+                    }
+                    const parts = msgText.split(" ");
+                    const bestMove = parts[1];
+                    if (state.multiPVMap && Object.keys(state.multiPVMap).length) {
+                        const entries = Object.values(state.multiPVMap);
+                        entries.sort((a, b) => {
+                            const ka = a.mate !== null ? (a.mate > 0 ? 100000 - a.mate : -100000 + Math.abs(a.mate)) : a.evalRaw;
+                            const kb = b.mate !== null ? (b.mate > 0 ? 100000 - b.mate : -100000 + Math.abs(b.mate)) : b.evalRaw;
+                            return kb - ka;
+                        });
+                        const best = entries[0];
+                        if (best && best.move) {
+                            const duration = ((performance.now() - state.analysisStartTime) / 1000).toFixed(2);
+                            processBestMove(best.move, best.evalRaw, best.mate, best.pv ? best.pv.split(" ") : null, best.winChance, duration, true, state.currentSearchFEN);
+                            return;
+                        }
+                    }
+                    const duration = ((performance.now() - state.analysisStartTime) / 1000).toFixed(2);
+                    processBestMove(bestMove, state.localEval, state.localMate, state.localPV ? state.localPV.split(" ") : null, null, duration, state.localDepth, true, state.currentSearchFEN);
+                    return;
+                }
+
+                // Handle info lines from ES6 module worker
+                if (msgText.startsWith("info") && msgText.includes("depth") && msgText.includes("score")) {
+                    const depthMatch = msgText.match(/depth (\d+)/);
+                    const scoreMatch = msgText.match(/score (cp|mate) (-?\d+)/);
+                    const pvMatch = msgText.match(/ pv (.*)/);
+                    const multipvMatch = msgText.match(/multipv (\d+)/);
+                    const isMainLine = !multipvMatch || multipvMatch[1] === "1";
+                    if (depthMatch && scoreMatch) {
+                        const depth = depthMatch[1];
+                        const val = parseInt(scoreMatch[2]);
+                        const type = scoreMatch[1];
+                        const pv = pvMatch ? pvMatch[1] : "";
+                        if (isMainLine) {
+                            if (type === "mate") { state.localMate = val; state.localEval = null; }
+                            else { state.localMate = null; state.localEval = (val / 100).toFixed(2); }
+                            state.localPV = pv; state.localDepth = depth;
+                        }
+                        if (settings.humanizer && state.multiPVMap && pv) {
+                            const firstMove = pv.split(" ")[0];
+                            if (firstMove && firstMove.length >= 4) {
+                                let scoreTxt;
+                                if (type === "mate") { scoreTxt = "M" + Math.abs(val); if (val < 0) scoreTxt = "-" + scoreTxt; }
+                                else { scoreTxt = (val > 0 ? "+" : "") + (val / 100).toFixed(2); }
+                                const evalVal = type === "mate" ? val : parseFloat(state.localEval);
+                                const statusData = getEvalStatusData(evalVal, type === "mate");
+                                const durHtml = ((performance.now() - state.analysisStartTime) / 1000).toFixed(2);
+                                if (pv) {
+                                    const best = pv.split(" ")[0];
+                                    Visuals.add(best, 'analysis');
+                                    PV.update(state.currentPV);
+                                    state.lastMoveResult = `⏳ D${depth}: <span style="font-weight:bold; color:var(--bot-primary);">${best}</span>`;
+                                }
+                                state.lastLiveResult = `
+                                    <div style="display:flex; justify-content:space-between; align-items:center; font-weight:bold;">
+                                        <div style="display:flex; align-items:center; gap: 8px;">
+                                            <span style="color:var(--bot-primary); font-size:1.1em;">${scoreTxt}</span>
+                                            <span style="font-size:0.85em; color:${statusData.color}; font-weight:bold;">${statusData.text}</span>
+                                        </div>
+                                        <span style="font-size:0.7em; color:#aaa; font-weight:normal;">(${durHtml}s)</span>
+                                    </div>`;
+                                updateUI();
+                            }
+                        }
+                        if (isMainLine) {
+                            if (pv) state.currentPV = pv.split(" ");
+                            if (settings.showEvalBar) EvalBar.update(type === "mate" ? null : parseFloat(state.localEval), type === "mate" ? val : null);
+                            let scoreTxt;
+                            if (type === "mate") { scoreTxt = "M" + Math.abs(val); if (val < 0) scoreTxt = "-" + scoreTxt; }
+                            else { scoreTxt = (val > 0 ? "+" : "") + (val / 100).toFixed(2); }
+                            const evalVal = type === "mate" ? val : parseFloat(state.localEval);
+                            const statusData = getEvalStatusData(evalVal, type === "mate");
+                            const durHtml = ((performance.now() - state.analysisStartTime) / 1000).toFixed(2);
+                            if (pv) {
+                                const best = pv.split(" ")[0];
+                                Visuals.add(best, 'analysis');
+                                PV.update(state.currentPV);
+                                state.lastMoveResult = `⏳ D${depth}: <span style="font-weight:bold; color:var(--bot-primary);">${best}</span>`;
+                            }
+                            state.lastLiveResult = `
+                                <div style="display:flex; justify-content:space-between; align-items:center; font-weight:bold;">
+                                    <div style="display:flex; align-items:center; gap: 8px;">
+                                        <span style="color:var(--bot-primary); font-size:1.1em;">${scoreTxt}</span>
+                                        <span style="font-size:0.85em; color:${statusData.color}; font-weight:bold;">${statusData.text}</span>
+                                    </div>
+                                    <span style="font-size:0.7em; color:#aaa; font-weight:normal;">(${durHtml}s)</span>
+                                </div>`;
+                            updateUI();
+                        }
                     }
                     return;
                 }
@@ -4147,7 +4257,14 @@ pvSettings: document.getElementById("pvSettings"),
 
         // ── Shared helpers ─────────────────────────────────────────────────
         const sendOpt = (name, val) => {
-            if (state.localEngine) state.localEngine.postMessage(`setoption name ${name} value ${val}`);
+            if (!state.localEngine) return;
+            const m = getEngineById(settings.localModelId);
+            const isEs6Module = m.format === "es6-module";
+            if (isEs6Module) {
+                state.localEngine.postMessage({ type: 'uci', cmd: `setoption name ${name} value ${val}` });
+            } else {
+                state.localEngine.postMessage(`setoption name ${name} value ${val}`);
+            }
         };
         // Save a setting scoped to the currently selected model
         const ms = (key, val) => saveModelSetting(key, val);
