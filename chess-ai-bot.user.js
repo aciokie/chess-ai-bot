@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.19
+// @version          11.13.20
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1550,6 +1550,9 @@ self.onmessage = function(e) {
                 console.log('[SF Worker] Engine has uci:', typeof instance.uci);
                 console.log('[SF Worker] Engine has listen:', typeof instance.listen);
                 console.log('[SF Worker] Engine has onError:', typeof instance.onError);
+                console.log('[SF Worker] Engine has start:', typeof instance.start);
+                console.log('[SF Worker] Engine has run:', typeof instance.run);
+                console.log('[SF Worker] Engine has init:', typeof instance.init);
                 engine = instance;
                 
                 // Forward UCI output to main thread - listen/onError are PROPERTIES, not methods!
@@ -1566,6 +1569,33 @@ self.onmessage = function(e) {
                 
                 // SF19 smallnet has embedded NNUE - no need to call setNnueBuffer
                 // The smallnet build includes the net in the WASM binary
+                
+                // Check if engine has a start() method (lichess mobile calls this)
+                if (typeof engine.start === 'function') {
+                    console.log('[SF Worker] Calling engine.start()...');
+                    try {
+                        const startResult = engine.start();
+                        if (startResult && typeof startResult.then === 'function') {
+                            startResult.then(() => {
+                                console.log('[SF Worker] engine.start() resolved');
+                            }).catch(err => {
+                                console.error('[SF Worker] engine.start() failed:', err);
+                            });
+                        } else {
+                            console.log('[SF Worker] engine.start() returned:', startResult);
+                        }
+                    } catch (err) {
+                        console.error('[SF Worker] engine.start() threw:', err);
+                    }
+                }
+                
+                // Also listen for custom 'stockfish' events (lichess mobile uses this)
+                self.addEventListener('stockfish', (e) => {
+                    console.log('[SF Worker] Received stockfish event:', e.output || e.data);
+                    if (e.output) {
+                        self.postMessage({ type: 'uci', text: e.output });
+                    }
+                });
                 
                 // Signal to main thread that worker is ready to receive UCI commands
                 self.postMessage({ type: 'worker-ready', text: 'Stockfish 19 Smallnet' });
