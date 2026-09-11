@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.24
+// @version          11.13.25
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1696,137 +1696,7 @@ createStockfish(moduleArg).then(async (instance) => {
                 }
             };
             
-            console.log('[SF Worker] Stockfish 19 Smallnet ES6 module worker initialized');
-        `;
-            // ES6 Module Stockfish Loader (SF19 Smallnet from lichess stockfish-web)
-            import createStockfish from '${jsBlobUrl}';
-            
-            let engine = null;
-            
-            // Create engine with custom locateFile and instantiateWasm for embedded WASM
-            const moduleArg = ${moduleArgStr};
-            
-            console.log('[SF Worker] Starting Stockfish 19 Smallnet initialization...');
-            console.log('[SF Worker] moduleArg keys:', Object.keys(moduleArg));
-            
-            // Initialize Stockfish
-            createStockfish(moduleArg).then(instance => {
-                console.log('[SF Worker] createStockfish resolved!');
-                console.log('[SF Worker] Engine instance keys:', Object.keys(instance));
-                console.log('[SF Worker] Engine has uci:', typeof instance.uci);
-                console.log('[SF Worker] Engine has listen:', typeof instance.listen);
-                console.log('[SF Worker] Engine has onError:', typeof instance.onError);
-                console.log('[SF Worker] Engine has start:', typeof instance.start);
-                console.log('[SF Worker] Engine has run:', typeof instance.run);
-                console.log('[SF Worker] Engine has init:', typeof instance.init);
-                console.log('[SF Worker] Engine has _main:', typeof instance._main);
-                console.log('[SF Worker] Engine has Module:', typeof instance.Module);
-                engine = instance;
-                
-                // Forward UCI output to main thread - listen/onError are PROPERTIES, not methods!
-                engine.listen = (line) => {
-                    console.log('[SF Worker] UCI output:', line);
-                    self.postMessage({ type: 'uci', text: line });
-                };
-                
-                // Forward errors
-                engine.onError = (msg) => {
-                    console.error('[SF Worker] Engine error:', msg);
-                    self.postMessage({ type: 'error', text: msg });
-                };
-                
-                // SF19 smallnet has embedded NNUE - no need to call setNnueBuffer
-                // The smallnet build includes the net in the WASM binary
-                
-// Check if engine has a start() method (lichess mobile calls this)
-                if (typeof engine.start === 'function') {
-                    console.log('[SF Worker] Calling engine.start()...');
-                    try {
-                        const startResult = engine.start();
-                        console.log('[SF Worker] engine.start() returned:', startResult, 'type:', typeof startResult);
-                        if (startResult && typeof startResult.then === 'function') {
-                            console.log('[SF Worker] engine.start() returned a promise, awaiting...');
-                            startResult.then(() => {
-                                console.log('[SF Worker] engine.start() promise resolved');
-                            }).catch(err => {
-                                console.error('[SF Worker] engine.start() promise rejected:', err);
-                            });
-                        } else {
-                            console.log('[SF Worker] engine.start() returned non-promise:', startResult);
-                        }
-                    } catch (err) {
-                        console.error('[SF Worker] engine.start() threw:', err);
-                    }
-                }
-                
-                // Try calling run() if it exists
-                if (typeof engine.run === 'function') {
-                    console.log('[SF Worker] Calling engine.run()...');
-                    try {
-                        const runResult = engine.run();
-                        console.log('[SF Worker] engine.run() returned:', runResult);
-                    } catch (err) {
-                        console.error('[SF Worker] engine.run() threw:', err);
-                    }
-                }
-                
-                // Try calling init() if it exists
-                if (typeof engine.init === 'function') {
-                    console.log('[SF Worker] Calling engine.init()...');
-                    try {
-                        const initResult = engine.init();
-                        console.log('[SF Worker] engine.init() returned:', initResult);
-                    } catch (err) {
-                        console.error('[SF Worker] engine.init() threw:', err);
-                    }
-                }
-                
-                // Try calling _main if it exists (Emscripten pthread entry point)
-                if (typeof engine._main === 'function') {
-                    console.log('[SF Worker] Calling engine._main() to start pthread...');
-                    try {
-                        engine._main();
-                        console.log('[SF Worker] engine._main() called');
-                    } catch (err) {
-                        console.error('[SF Worker] engine._main() threw:', err);
-                    }
-                }
-                
-                // Also listen for custom 'stockfish' events (lichess mobile uses this)
-                self.addEventListener('stockfish', (e) => {
-                    console.log('[SF Worker] Received stockfish event:', e.output || e.data);
-                    if (e.output) {
-                        self.postMessage({ type: 'uci', text: e.output });
-                    }
-                });
-                
-                // Signal to main thread that worker is ready to receive UCI commands
-                self.postMessage({ type: 'worker-ready', text: 'Stockfish 19 Smallnet' });
-                
-                // 3s alive beacon (like WASM-patched worker) so heartbeat knows worker is alive
-                setInterval(() => {
-                    self.postMessage({ type: 'probe', text: 'beacon' });
-                }, 3000);
-            }).catch(err => {
-                console.error('[SF Worker] createStockfish failed:', err);
-                self.postMessage({ type: 'error', text: 'Failed to init Stockfish 19 Smallnet: ' + err });
-            });
-            
-            // Handle UCI commands from main thread
-            self.onmessage = (e) => {
-                const cmd = e.data;
-                if (cmd.type === 'uci' && cmd.cmd && engine) {
-                    console.log('[SF Worker] Sending UCI command:', cmd.cmd);
-                    try {
-                        engine.uci(cmd.cmd);
-                        console.log('[SF Worker] UCI command sent successfully');
-                    } catch (err) {
-                        console.error('[SF Worker] UCI command failed:', err);
-                    }
-                }
-            };
-            
-            console.log('[SF Worker] Stockfish 19 Smallnet ES6 module worker initialized');
+console.log('[SF Worker] Stockfish 19 Smallnet ES6 module worker initialized');
         `;
         
         const blob = new Blob([moduleLoader], { type: "application/javascript" });
