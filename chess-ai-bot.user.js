@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.23
+// @version          11.13.24
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1531,9 +1531,9 @@ self.onmessage = function(e) {
             ? `{ locateFile: (path, prefix) => { if (path.endsWith('.wasm')) return '${wasmBlobUrl}'; return prefix + path; }, instantiateWasm: (imports, successCallback) => { fetch('${wasmBlobUrl}').then(r => r.arrayBuffer()).then(bytes => WebAssembly.instantiate(bytes, imports)).then(result => successCallback(result.instance, result.module)).catch(e => { console.error('[SF Worker] instantiateWasm failed:', e); throw e; }); return {}; } }` 
             : '{}';
 
-        const moduleLoader = `
+const moduleLoader = `
             // ES6 Module Stockfish Loader (SF19 Smallnet from lichess stockfish-web)
-            import createStockfish from '${jsBlobUrl}';
+            const createStockfish = (await import('${jsBlobUrl}')).default;
             
             let engine = null;
             
