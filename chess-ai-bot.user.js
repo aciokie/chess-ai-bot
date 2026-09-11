@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.14
+// @version          11.13.15
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1520,25 +1520,32 @@ self.onmessage = function(e) {
         const wasmB64 = wasmBytes ? bytesToBase64(wasmBytes) : (SF19_SMALLNET_WASM_B64 || null);
         const jsB64 = SF19_SMALLNET_JS_B64 || null;
         
-        // Create data URL for JS module (import works with data: URLs in module workers)
-        const jsDataUrl = jsB64 ? `data:application/javascript;base64,${jsB64}` : jsCode;
+        // Create blob URLs for both JS and WASM (more reliable than data: URLs in module workers)
+        const jsBlob = jsB64 ? new Blob([Uint8Array.from(atob(jsB64), c => c.charCodeAt(0))], { type: "application/javascript" }) : new Blob([jsCode], { type: "application/javascript" });
+        const wasmBlob = wasmB64 ? new Blob([Uint8Array.from(atob(wasmB64), c => c.charCodeAt(0))], { type: "application/wasm" }) : null;
+        const jsBlobUrl = URL.createObjectURL(jsBlob);
+        const wasmBlobUrl = wasmBlob ? URL.createObjectURL(wasmBlob) : null;
         
-        // Pass WASM base64 directly in moduleArg to avoid fetch() on data: URL
-        const moduleArgStr = wasmB64 
-            ? `{ locateFile: (path, prefix) => { if (path.endsWith('.wasm')) return prefix + path; }, instantiateWasm: (imports, successCallback) => { const binary = atob('${wasmB64}'); const bytes = new Uint8Array(binary.length); for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i); WebAssembly.instantiate(bytes, imports).then(result => successCallback(result.instance, result.module)).catch(e => { console.error('[SF Worker] instantiateWasm failed:', e); throw e; }); return {}; } }` 
+        // Pass both blob URLs in moduleArg - locateFile for normal loading, instantiateWasm as fallback
+        const moduleArgStr = wasmBlobUrl 
+            ? `{ locateFile: (path, prefix) => { if (path.endsWith('.wasm')) return '${wasmBlobUrl}'; return prefix + path; }, instantiateWasm: (imports, successCallback) => { fetch('${wasmBlobUrl}').then(r => r.arrayBuffer()).then(bytes => WebAssembly.instantiate(bytes, imports)).then(result => successCallback(result.instance, result.module)).catch(e => { console.error('[SF Worker] instantiateWasm failed:', e); throw e; }); return {}; } }` 
             : '{}';
 
         const moduleLoader = `
             // ES6 Module Stockfish Loader (SF19 Smallnet from lichess stockfish-web)
-            import createStockfish from '${jsDataUrl}';
+            import createStockfish from '${jsBlobUrl}';
             
             let engine = null;
             
             // Create engine with custom locateFile and instantiateWasm for embedded WASM
             const moduleArg = ${moduleArgStr};
             
+            console.log('[SF Worker] Starting Stockfish 19 Smallnet initialization...');
+            console.log('[SF Worker] moduleArg keys:', Object.keys(moduleArg));
+            
             // Initialize Stockfish
             createStockfish(moduleArg).then(instance => {
+                console.log('[SF Worker] createStockfish resolved!');
                 engine = instance;
                 
                 // Forward UCI output to main thread - listen/onError are PROPERTIES, not methods!
@@ -1554,13 +1561,14 @@ self.onmessage = function(e) {
                 // SF19 smallnet has embedded NNUE - no need to call setNnueBuffer
                 // The smallnet build includes the net in the WASM binary
                 
-                self.postMessage({ type: 'ready', engine: 'Stockfish 19 Smallnet' });
+                self.postMessage({ type: 'ready', text: 'Stockfish 19 Smallnet' });
                 
                 // 3s alive beacon (like WASM-patched worker) so heartbeat knows worker is alive
                 setInterval(() => {
                     self.postMessage({ type: 'probe', text: 'beacon' });
                 }, 3000);
             }).catch(err => {
+                console.error('[SF Worker] createStockfish failed:', err);
                 self.postMessage({ type: 'error', text: 'Failed to init Stockfish 19 Smallnet: ' + err });
             });
             
@@ -1570,7 +1578,7 @@ self.onmessage = function(e) {
                 if (cmd.type === 'uci' && cmd.cmd && engine) {
                     engine.uci(cmd.cmd);
                 } else if (cmd.type === 'init' && engine) {
-                    self.postMessage({ type: 'ready', engine: 'Stockfish 19 Smallnet' });
+                    self.postMessage({ type: 'ready', text: 'Stockfish 19 Smallnet' });
                 }
             };
             
@@ -1581,9 +1589,11 @@ self.onmessage = function(e) {
         const blobUrl = URL.createObjectURL(blob);
         const worker = new Worker(blobUrl, { type: 'module' });
         
-        // Clean up blob URL when worker is terminated
+        // Clean up blob URLs when worker is terminated
         worker.onerror = () => {
             URL.revokeObjectURL(blobUrl);
+            if (jsBlob) URL.revokeObjectURL(jsBlobUrl);
+            if (wasmBlob) URL.revokeObjectURL(wasmBlobUrl);
         };
         
         return worker;
@@ -2823,6 +2833,7 @@ function analyzeLocal(fen, depth, wasThinking = false) {
             
             if (msgType === 'ready') {
                 console.log(`[SF Engine] Worker ready: ${msgText}`);
+                // Engine is initialized, now wait for uciok
                 return;
             }
             
