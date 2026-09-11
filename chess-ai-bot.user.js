@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.8
+// @version          11.13.9
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1516,7 +1516,8 @@ self.onmessage = function(e) {
         // The JS module exports a default factory function that returns a Promise<StockfishWeb>
         // StockfishWeb interface: { uci, listen, onError, setNnueBuffer, getRecommendedNnue }
         
-        const wasmB64 = wasmBytes ? btoa(bytesToBase64(wasmBytes)) : (SF19_SMALLNET_WASM_B64 || null);
+        // wasmBytes is already a Uint8Array from the caller; convert to base64 once
+        const wasmB64 = wasmBytes ? bytesToBase64(wasmBytes) : (SF19_SMALLNET_WASM_B64 || null);
         const jsB64 = SF19_SMALLNET_JS_B64 || null;
         
         // Create blob URLs for both JS and WASM
