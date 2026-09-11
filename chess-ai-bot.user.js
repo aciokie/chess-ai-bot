@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.11
+// @version          11.13.12
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1520,12 +1520,12 @@ self.onmessage = function(e) {
         const wasmB64 = wasmBytes ? bytesToBase64(wasmBytes) : (SF19_SMALLNET_WASM_B64 || null);
         const jsB64 = SF19_SMALLNET_JS_B64 || null;
         
-        // Create data URLs for both JS and WASM (more reliable than blob URLs in module workers)
+        // Create data URL for JS module (import works with data: URLs in module workers)
         const jsDataUrl = jsB64 ? `data:application/javascript;base64,${jsB64}` : jsCode;
-        const wasmDataUrl = wasmB64 ? `data:application/wasm;base64,${wasmB64}` : null;
         
-        const moduleArgStr = wasmDataUrl 
-            ? `{ locateFile: (path, prefix) => { if (path.endsWith('.wasm')) return '${wasmDataUrl}'; return prefix + path; }, instantiateWasm: (imports, successCallback) => { fetch('${wasmDataUrl}').then(r => r.arrayBuffer()).then(bytes => WebAssembly.instantiate(bytes, imports)).then(result => successCallback(result.instance, result.module)).catch(e => { console.error('[SF Worker] instantiateWasm failed:', e); throw e; }); return {}; } }` 
+        // Pass WASM base64 directly in moduleArg to avoid fetch() on data: URL
+        const moduleArgStr = wasmB64 
+            ? `{ locateFile: (path, prefix) => { if (path.endsWith('.wasm')) return prefix + path; }, instantiateWasm: (imports, successCallback) => { const binary = atob('${wasmB64}'); const bytes = new Uint8Array(binary.length); for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i); WebAssembly.instantiate(bytes, imports).then(result => successCallback(result.instance, result.module)).catch(e => { console.error('[SF Worker] instantiateWasm failed:', e); throw e; }); return {}; } }` 
             : '{}';
 
         const moduleLoader = `
@@ -1555,6 +1555,11 @@ self.onmessage = function(e) {
                 // The smallnet build includes the net in the WASM binary
                 
                 self.postMessage({ type: 'ready', engine: 'Stockfish 19 Smallnet' });
+                
+                // 3s alive beacon (like WASM-patched worker) so heartbeat knows worker is alive
+                setInterval(() => {
+                    self.postMessage({ type: 'probe', text: 'beacon' });
+                }, 3000);
             }).catch(err => {
                 self.postMessage({ type: 'error', text: 'Failed to init Stockfish 19 Smallnet: ' + err });
             });
@@ -1573,11 +1578,12 @@ self.onmessage = function(e) {
         `;
         
         const blob = new Blob([moduleLoader], { type: "application/javascript" });
-        const worker = new Worker(URL.createObjectURL(blob), { type: 'module' });
+        const blobUrl = URL.createObjectURL(blob);
+        const worker = new Worker(blobUrl, { type: 'module' });
         
-        // Clean up blob URLs when worker is terminated
+        // Clean up blob URL when worker is terminated
         worker.onerror = () => {
-            URL.revokeObjectURL(URL.createObjectURL(blob));
+            URL.revokeObjectURL(blobUrl);
         };
         
         return worker;
@@ -2676,6 +2682,15 @@ function analyzeLocal(fen, depth, wasThinking = false) {
             
             if (msgType === 'ready') {
                 console.log(`[SF Engine] Worker ready: ${msgText}`);
+                return;
+            }
+            
+            if (msgType === 'probe' && msgText === 'beacon') {
+                // 3s alive beacon from ES6 module worker
+                state.lastWorkerProbeAt = performance.now();
+                state.heartbeatMisses = 0;
+                if (state.engineStatus === "loading")
+                    console.log(`[SF Engine] ⤵ worker alive at ${Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000)}s (compiling)`);
                 return;
             }
             
