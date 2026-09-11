@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.10
+// @version          11.13.11
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1541,15 +1541,15 @@ self.onmessage = function(e) {
             createStockfish(moduleArg).then(instance => {
                 engine = instance;
                 
-                // Forward UCI output to main thread
-                engine.listen((line) => {
+                // Forward UCI output to main thread - listen/onError are PROPERTIES, not methods!
+                engine.listen = (line) => {
                     self.postMessage({ type: 'uci', text: line });
-                });
+                };
                 
                 // Forward errors
-                engine.onError((msg) => {
+                engine.onError = (msg) => {
                     self.postMessage({ type: 'error', text: msg });
-                });
+                };
                 
                 // SF19 smallnet has embedded NNUE - no need to call setNnueBuffer
                 // The smallnet build includes the net in the WASM binary
