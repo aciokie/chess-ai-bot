@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.9
+// @version          11.13.10
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1520,23 +1520,21 @@ self.onmessage = function(e) {
         const wasmB64 = wasmBytes ? bytesToBase64(wasmBytes) : (SF19_SMALLNET_WASM_B64 || null);
         const jsB64 = SF19_SMALLNET_JS_B64 || null;
         
-        // Create blob URLs for both JS and WASM
-        const jsBlob = jsB64 ? new Blob([atob(jsB64)], { type: "application/javascript" }) : null;
-        const wasmBlob = wasmB64 ? new Blob([Uint8Array.from(atob(wasmB64), c => c.charCodeAt(0))], { type: "application/wasm" }) : null;
-        const jsBlobUrl = jsBlob ? URL.createObjectURL(jsBlob) : jsCode;
-        const wasmBlobUrl = wasmBlob ? URL.createObjectURL(wasmBlob) : null;
+        // Create data URLs for both JS and WASM (more reliable than blob URLs in module workers)
+        const jsDataUrl = jsB64 ? `data:application/javascript;base64,${jsB64}` : jsCode;
+        const wasmDataUrl = wasmB64 ? `data:application/wasm;base64,${wasmB64}` : null;
         
-        const moduleArgStr = wasmBlobUrl 
-            ? `{ locateFile: (path, prefix) => { if (path.endsWith('.wasm')) return '${wasmBlobUrl}'; return prefix + path; } }` 
+        const moduleArgStr = wasmDataUrl 
+            ? `{ locateFile: (path, prefix) => { if (path.endsWith('.wasm')) return '${wasmDataUrl}'; return prefix + path; }, instantiateWasm: (imports, successCallback) => { fetch('${wasmDataUrl}').then(r => r.arrayBuffer()).then(bytes => WebAssembly.instantiate(bytes, imports)).then(result => successCallback(result.instance, result.module)).catch(e => { console.error('[SF Worker] instantiateWasm failed:', e); throw e; }); return {}; } }` 
             : '{}';
 
         const moduleLoader = `
             // ES6 Module Stockfish Loader (SF19 Smallnet from lichess stockfish-web)
-            import createStockfish from '${jsBlobUrl}';
+            import createStockfish from '${jsDataUrl}';
             
             let engine = null;
             
-            // Create engine with custom locateFile for embedded WASM
+            // Create engine with custom locateFile and instantiateWasm for embedded WASM
             const moduleArg = ${moduleArgStr};
             
             // Initialize Stockfish
@@ -1577,10 +1575,9 @@ self.onmessage = function(e) {
         const blob = new Blob([moduleLoader], { type: "application/javascript" });
         const worker = new Worker(URL.createObjectURL(blob), { type: 'module' });
         
-        // Clean up blob URLs when worker is terminated (not on every message)
+        // Clean up blob URLs when worker is terminated
         worker.onerror = () => {
-            if (jsBlob) URL.revokeObjectURL(jsBlobUrl);
-            if (wasmBlob) URL.revokeObjectURL(wasmBlobUrl);
+            URL.revokeObjectURL(URL.createObjectURL(blob));
         };
         
         return worker;
