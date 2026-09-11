@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.20
+// @version          11.13.21
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1553,6 +1553,8 @@ self.onmessage = function(e) {
                 console.log('[SF Worker] Engine has start:', typeof instance.start);
                 console.log('[SF Worker] Engine has run:', typeof instance.run);
                 console.log('[SF Worker] Engine has init:', typeof instance.init);
+                console.log('[SF Worker] Engine has _main:', typeof instance._main);
+                console.log('[SF Worker] Engine has Module:', typeof instance.Module);
                 engine = instance;
                 
                 // Forward UCI output to main thread - listen/onError are PROPERTIES, not methods!
@@ -1586,6 +1588,17 @@ self.onmessage = function(e) {
                         }
                     } catch (err) {
                         console.error('[SF Worker] engine.start() threw:', err);
+                    }
+                }
+                
+                // Try calling _main if it exists (Emscripten pthread entry point)
+                if (typeof engine._main === 'function') {
+                    console.log('[SF Worker] Calling engine._main() to start pthread...');
+                    try {
+                        engine._main();
+                        console.log('[SF Worker] engine._main() called');
+                    } catch (err) {
+                        console.error('[SF Worker] engine._main() threw:', err);
                     }
                 }
                 
