@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.22
+// @version          11.13.23
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1544,7 +1544,7 @@ self.onmessage = function(e) {
             console.log('[SF Worker] moduleArg keys:', Object.keys(moduleArg));
             
             // Initialize Stockfish
-            createStockfish(moduleArg).then(async (instance) => {
+createStockfish(moduleArg).then(async (instance) => {
                 console.log('[SF Worker] createStockfish resolved!');
                 console.log('[SF Worker] Engine instance keys:', Object.keys(instance));
                 console.log('[SF Worker] Engine has uci:', typeof instance.uci);
@@ -1557,17 +1557,56 @@ self.onmessage = function(e) {
                 console.log('[SF Worker] Engine has Module:', typeof instance.Module);
                 engine = instance;
                 
-                // Forward UCI output to main thread - listen/onError are PROPERTIES, not methods!
+                // The engine might be a wrapper - try to access the underlying Module
+                const Module = engine.Module || engine;
+                console.log('[SF Worker] Module object:', typeof Module);
+                console.log('[SF Worker] Module has listen:', typeof Module.listen);
+                console.log('[SF Worker] Module has onError:', typeof Module.onError);
+                console.log('[SF Worker] Module has print:', typeof Module.print);
+                console.log('[SF Worker] Module has printErr:', typeof Module.printErr);
+                
+                // Forward UCI output to main thread - try both engine.listen and Module.listen
                 engine.listen = (line) => {
-                    console.log('[SF Worker] UCI output:', line);
+                    console.log('[SF Worker] UCI output (engine.listen):', line);
                     self.postMessage({ type: 'uci', text: line });
                 };
+                
+                // Also set Module.listen directly (what initModule.js uses)
+                if (Module && typeof Module.listen === 'function') {
+                    const originalListen = Module.listen;
+                    Module.listen = (line) => {
+                        console.log('[SF Worker] UCI output (Module.listen):', line);
+                        self.postMessage({ type: 'uci', text: line });
+                    };
+                    console.log('[SF Worker] Set Module.listen wrapper');
+                } else if (Module) {
+                    Module.listen = (line) => {
+                        console.log('[SF Worker] UCI output (Module.listen):', line);
+                        self.postMessage({ type: 'uci', text: line });
+                    };
+                    console.log('[SF Worker] Set Module.listen directly');
+                }
                 
                 // Forward errors
                 engine.onError = (msg) => {
                     console.error('[SF Worker] Engine error:', msg);
                     self.postMessage({ type: 'error', text: msg });
                 };
+                
+                if (Module && typeof Module.onError === 'function') {
+                    const originalOnError = Module.onError;
+                    Module.onError = (msg) => {
+                        console.error('[SF Worker] Engine error (Module.onError):', msg);
+                        self.postMessage({ type: 'error', text: msg });
+                    };
+                    console.log('[SF Worker] Set Module.onError wrapper');
+                } else if (Module) {
+                    Module.onError = (msg) => {
+                        console.error('[SF Worker] Engine error (Module.onError):', msg);
+                        self.postMessage({ type: 'error', text: msg });
+                    };
+                    console.log('[SF Worker] Set Module.onError directly');
+                }
                 
                 // SF19 smallnet has embedded NNUE - no need to call setNnueBuffer
                 // The smallnet build includes the net in the WASM binary
