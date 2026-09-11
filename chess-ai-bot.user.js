@@ -3422,6 +3422,8 @@ function triggerAutoMove(fen = null) {
     }
 
     function updateLocalSettingsUI() {
+        const statusEl     = document.getElementById("localEngineStatus");
+        const statusMsgEl  = document.getElementById("localEngineStatusMsg");
         const btnInstall   = document.getElementById("btnLocalInstall");
         const btnReinstall = document.getElementById("btnLocalReinstall");
         const btnForceReinstall = document.getElementById("btnLocalForceReinstall");
@@ -5001,7 +5003,7 @@ pvSettings: document.getElementById("pvSettings"),
                 }
             }
         }
-        if (!state.ui.panel) createUI();
+        if (state.board?.game && !state.ui.panel) createUI();
         if (state.board?.game?.getPlayingAs) {
             try { const pa = state.board.game.getPlayingAs(); if (pa === 1 || pa === 2) state.playingAs = pa; } catch (e) { reportError("getPlayingAs in checkAndAnalyze", e); }
         }
