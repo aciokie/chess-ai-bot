@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.16
+// @version          11.13.17
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1550,11 +1550,13 @@ self.onmessage = function(e) {
                 
                 // Forward UCI output to main thread - listen/onError are PROPERTIES, not methods!
                 engine.listen = (line) => {
+                    console.log('[SF Worker] UCI output:', line);
                     self.postMessage({ type: 'uci', text: line });
                 };
                 
                 // Forward errors
                 engine.onError = (msg) => {
+                    console.error('[SF Worker] Engine error:', msg);
                     self.postMessage({ type: 'error', text: msg });
                 };
                 
@@ -1574,6 +1576,7 @@ self.onmessage = function(e) {
             self.onmessage = (e) => {
                 const cmd = e.data;
                 if (cmd.type === 'uci' && cmd.cmd && engine) {
+                    console.log('[SF Worker] Sending UCI command:', cmd.cmd);
                     engine.uci(cmd.cmd);
                 }
             };
