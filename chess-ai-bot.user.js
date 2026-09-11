@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.15
+// @version          11.13.16
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1561,8 +1561,6 @@ self.onmessage = function(e) {
                 // SF19 smallnet has embedded NNUE - no need to call setNnueBuffer
                 // The smallnet build includes the net in the WASM binary
                 
-                self.postMessage({ type: 'ready', text: 'Stockfish 19 Smallnet' });
-                
                 // 3s alive beacon (like WASM-patched worker) so heartbeat knows worker is alive
                 setInterval(() => {
                     self.postMessage({ type: 'probe', text: 'beacon' });
@@ -1577,8 +1575,6 @@ self.onmessage = function(e) {
                 const cmd = e.data;
                 if (cmd.type === 'uci' && cmd.cmd && engine) {
                     engine.uci(cmd.cmd);
-                } else if (cmd.type === 'init' && engine) {
-                    self.postMessage({ type: 'ready', text: 'Stockfish 19 Smallnet' });
                 }
             };
             
