@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.17
+// @version          11.13.18
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1563,6 +1563,9 @@ self.onmessage = function(e) {
                 // SF19 smallnet has embedded NNUE - no need to call setNnueBuffer
                 // The smallnet build includes the net in the WASM binary
                 
+                // Signal to main thread that worker is ready to receive UCI commands
+                self.postMessage({ type: 'worker-ready', text: 'Stockfish 19 Smallnet' });
+                
                 // 3s alive beacon (like WASM-patched worker) so heartbeat knows worker is alive
                 setInterval(() => {
                     self.postMessage({ type: 'probe', text: 'beacon' });
@@ -1598,13 +1601,13 @@ self.onmessage = function(e) {
         return worker;
     }
 
-    function finalizeEngine(modelId) {
+function finalizeEngine(modelId) {
         if (state.engineLoadWatchdog) { clearTimeout(state.engineLoadWatchdog); state.engineLoadWatchdog = null; }
         state.engineLoadingInProgress = false;
         // Don't set ready yet — wait for uciok from the engine
         setEngineStatus("loading", "Initializing...");
         const m = getEngineById(modelId);
-        console.log(`[SF Engine] ${m.label} worker built, sending uci...`);
+        console.log(`[SF Engine] ${m.label} worker built, waiting for worker-ready...`);
         state.engineBuildTime = performance.now();
         console.debug(`[SF Engine] Model caps:`, { hasHash: m.hasHash, hasMoveOverhead: m.hasMoveOverhead, hasSlowMover: m.hasSlowMover, hasWDL: m.hasWDL, hasSkillLevel: m.hasSkillLevel, hasNNUE: m.hasNNUE, hasContempt: m.hasContempt, hasMinThink: m.hasMinThink, maxDepth: m.maxDepth });
         
@@ -1612,75 +1615,109 @@ self.onmessage = function(e) {
         const isEs6Module = m.format === "es6-module";
         
         if (isEs6Module) {
-            // ES6 module worker uses object protocol
-            state.localEngine.postMessage({ type: 'uci', cmd: 'uci' });
-        } else {
-            // Classic worker uses string protocol
-            state.localEngine.postMessage("uci");
-        }
-        
-        // Send all init options after uci (engine queues them internally)
-        sendEngineInitCommands(modelId);
-        
-        if (isEs6Module) {
-            state.localEngine.postMessage({ type: 'uci', cmd: 'isready' });
-        } else {
-            state.localEngine.postMessage("isready");
-        }
-        
-        updateUI();
-        updateLocalSettingsUI();
-
-        // Heartbeat instead of a fixed kill-timeout: the 112MB wasm can take a
-        // long time to compile+init (original code had NO timeout and just
-        // waited). Every 15s while loading we send "isready"; a "readyok"
-        // reply means the engine is alive and we keep waiting forever. Only
-        // TWO consecutive missed heartbeats (dead worker) terminate it.
-        // readyok also acknowledges the initial isready sent above.
-        state.pendingReadyProbe = true;
-        state.heartbeatMisses = 0;
-        const stopHeartbeat = () => {
-            if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
-            state.pendingReadyProbe = false;
-        };
-        state.engineHeartbeatTimer = setInterval(() => {
-            if (!state.localEngine || state.engineStatus !== "loading") { stopHeartbeat(); return; }
-            // Worker-side probes (3s alive beacon) reset the miss counter —
-            // beacons prove the event loop is free; their absence means the
-            // script is blocked (dead or mid-compile). A blocked-but-alive
-            // worker gets 6 misses (90s) before we declare it dead.
-            if (state.lastWorkerProbeAt && performance.now() - state.lastWorkerProbeAt < 3500) {
-                state.heartbeatMisses = 0;
-                return;
-            }
-            if (state.pendingReadyProbe) {
-                state.heartbeatMisses++;
-                const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
-                console.warn(`[SF Engine] heartbeat miss ${state.heartbeatMisses}/6 at ${elapsed}s — worker unresponsive`);
-                if (state.heartbeatMisses >= 6) {
-                    stopHeartbeat();
-                    const errMsg = `Engine worker unresponsive (${elapsed}s, 2 missed heartbeats). Model: ${m.label} (${modelId}). Check: 1) blob wasm URL fetch working? 2) CSP blocking worker? 3) JS parse error in worker?`;
-                    console.error(`[SF Engine] ${errMsg}`);
-                    try { state.localEngine.terminate(); } catch (e) { reportError("terminate worker on heartbeat fail", e); }
-                    state.localEngine = null;
-                    setEngineStatus("error", errMsg);
+            // Wait for worker-ready signal before sending UCI commands
+            const onWorkerReady = (e) => {
+                if (e.data && e.data.type === 'worker-ready') {
+                    console.log(`[SF Engine] Worker ready signal received, sending uci...`);
+                    state.localEngine.onmessage = handleLocalMessage; // restore main handler
+                    
+                    // Now send UCI initialization sequence
+                    state.localEngine.postMessage({ type: 'uci', cmd: 'uci' });
+                    sendEngineInitCommands(modelId);
+                    state.localEngine.postMessage({ type: 'uci', cmd: 'isready' });
+                    
                     updateUI();
+                    updateLocalSettingsUI();
+                    
+                    // Heartbeat
+                    state.pendingReadyProbe = true;
+                    state.heartbeatMisses = 0;
+                    const stopHeartbeat = () => {
+                        if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
+                        state.pendingReadyProbe = false;
+                    };
+                    state.engineHeartbeatTimer = setInterval(() => {
+                        if (!state.localEngine || state.engineStatus !== "loading") { stopHeartbeat(); return; }
+                        if (state.lastWorkerProbeAt && performance.now() - state.lastWorkerProbeAt < 3500) {
+                            state.heartbeatMisses = 0;
+                            return;
+                        }
+                        if (state.pendingReadyProbe) {
+                            state.heartbeatMisses++;
+                            const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
+                            console.warn(`[SF Engine] heartbeat miss ${state.heartbeatMisses}/6 at ${elapsed}s — worker unresponsive`);
+                            if (state.heartbeatMisses >= 6) {
+                                stopHeartbeat();
+                                const errMsg = `Engine worker unresponsive (${elapsed}s, 2 missed heartbeats). Model: ${m.label} (${modelId}). Check: 1) blob wasm URL fetch working? 2) CSP blocking worker? 3) JS parse error in worker?`;
+                                console.error(`[SF Engine] ${errMsg}`);
+                                try { state.localEngine.terminate(); } catch (e) { reportError("terminate worker on heartbeat fail", e); }
+                                state.localEngine = null;
+                                setEngineStatus("error", errMsg);
+                                updateUI();
+                                return;
+                            }
+                        } else {
+                            state.heartbeatMisses = 0;
+                            const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
+                            console.log(`[SF Engine] engine alive at ${elapsed}s, still initializing — waiting`);
+                        }
+                        try { 
+                            state.localEngine.postMessage({ type: 'uci', cmd: 'isready' });
+                        } catch (e) { reportError("heartbeat postMessage", e); }
+                        state.pendingReadyProbe = true;
+                    }, 15000);
+                }
+            };
+            
+            // Temporarily replace handler to catch worker-ready
+            state.localEngine.onmessage = onWorkerReady;
+        } else {
+            // Classic worker: send UCI immediately
+            state.localEngine.postMessage("uci");
+            sendEngineInitCommands(modelId);
+            state.localEngine.postMessage("isready");
+            
+            updateUI();
+            updateLocalSettingsUI();
+            
+            // Heartbeat
+            state.pendingReadyProbe = true;
+            state.heartbeatMisses = 0;
+            const stopHeartbeat = () => {
+                if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
+                state.pendingReadyProbe = false;
+            };
+            state.engineHeartbeatTimer = setInterval(() => {
+                if (!state.localEngine || state.engineStatus !== "loading") { stopHeartbeat(); return; }
+                if (state.lastWorkerProbeAt && performance.now() - state.lastWorkerProbeAt < 3500) {
+                    state.heartbeatMisses = 0;
                     return;
                 }
-            } else {
-                state.heartbeatMisses = 0;
-                const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
-                console.log(`[SF Engine] engine alive at ${elapsed}s, still initializing — waiting`);
-            }
-            try { 
-                if (isEs6Module) {
-                    state.localEngine.postMessage({ type: 'uci', cmd: 'isready' });
+                if (state.pendingReadyProbe) {
+                    state.heartbeatMisses++;
+                    const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
+                    console.warn(`[SF Engine] heartbeat miss ${state.heartbeatMisses}/6 at ${elapsed}s — worker unresponsive`);
+                    if (state.heartbeatMisses >= 6) {
+                        stopHeartbeat();
+                        const errMsg = `Engine worker unresponsive (${elapsed}s, 2 missed heartbeats). Model: ${m.label} (${modelId}). Check: 1) blob wasm URL fetch working? 2) CSP blocking worker? 3) JS parse error in worker?`;
+                        console.error(`[SF Engine] ${errMsg}`);
+                        try { state.localEngine.terminate(); } catch (e) { reportError("terminate worker on heartbeat fail", e); }
+                        state.localEngine = null;
+                        setEngineStatus("error", errMsg);
+                        updateUI();
+                        return;
+                    }
                 } else {
-                    state.localEngine.postMessage("isready");
+                    state.heartbeatMisses = 0;
+                    const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
+                    console.log(`[SF Engine] engine alive at ${elapsed}s, still initializing — waiting`);
                 }
-            } catch (e) { reportError("heartbeat postMessage", e); }
-            state.pendingReadyProbe = true;
-        }, 15000);
+                try { 
+                    state.localEngine.postMessage("isready");
+                } catch (e) { reportError("heartbeat postMessage", e); }
+                state.pendingReadyProbe = true;
+            }, 15000);
+        }
     }
 
     function onEngineWorkerError(e) {
