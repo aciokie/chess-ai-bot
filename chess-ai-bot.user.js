@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.12
+// @version          11.13.13
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1730,59 +1730,100 @@ self.onmessage = function(e) {
     }
 
     // ─── Cache helpers ────────────────────────────────────────────────────────
+// Brave Containers / partitioned storage / incognito / private mode can cause
+// IndexedDB to be unavailable, throw SecurityError, or stall indefinitely.
+// We use a global flag to disable cache after first failure to avoid repeated timeouts.
+let cacheDisabled = false;
+
     function openCache(cb) {
+        // Skip if already disabled
+        if (cacheDisabled) { cb(new Error("Cache disabled"), null); return; }
         if (typeof indexedDB === "undefined" || !indexedDB) { cb(new Error("IndexedDB unavailable"), null); return; }
         let settled = false;
         let dbReq = null;
         try {
             dbReq = indexedDB.open("sfEngineCache", 2);
         } catch (e) {
+            reportError("IndexedDB open threw", e);
+            cacheDisabled = true;
             cb(new Error("IndexedDB open threw: " + (e && e.message || e)), null);
             return;
         }
         const timer = setTimeout(() => {
             if (settled) return;
             settled = true;
+            cacheDisabled = true;
             cb(new Error("IndexedDB open timed out"), null);
-        }, 5000);
+        }, 3000); // Reduced from 5s to 3s for faster fallback
         dbReq.onupgradeneeded = (e) => {
             const db = e.target.result;
             if (!db.objectStoreNames.contains("engines")) db.createObjectStore("engines");
         };
         dbReq.onsuccess = (e) => { if (settled) return; settled = true; clearTimeout(timer); cb(null, e.target.result); };
-        dbReq.onerror = () => { if (settled) return; settled = true; clearTimeout(timer); cb(new Error("IndexedDB open failed"), null); };
-        dbReq.onblocked = () => { if (settled) return; settled = true; clearTimeout(timer); cb(new Error("IndexedDB open blocked — continuing without cache"), null); };
+        dbReq.onerror = (e) => { if (settled) return; settled = true; clearTimeout(timer); 
+            const err = e.target?.error?.name || "IndexedDB open failed";
+            // Detect partitioned storage / private mode errors
+            if (err === "SecurityError" || err === "NotAllowedError" || err === "InvalidStateError") {
+                cacheDisabled = true;
+            }
+            cb(new Error(err), null); };
+        dbReq.onblocked = () => { if (settled) return; settled = true; clearTimeout(timer); 
+            cacheDisabled = true;
+            cb(new Error("IndexedDB open blocked — continuing without cache"), null); };
     }
 
     function readCache(db, key, cb) {
+        if (cacheDisabled) { cb(null, null); return; }
         let done = false;
         const finish = (err, val) => { if (!done) { done = true; clearTimeout(timer); cb(err, val); } };
-        const timer = setTimeout(() => finish(new Error("readCache timed out"), null), 4000);
+        const timer = setTimeout(() => finish(null, null), 2000); // Reduced from 4s to 2s
         try {
             const req = db.transaction("engines", "readonly").objectStore("engines").get(key);
             req.onsuccess = (e) => finish(null, e.target.result || null);
-            req.onerror = () => finish(null, null);
-        } catch (e) { finish(null, null); }
+            req.onerror = (e) => {
+                const err = e.target?.error?.name;
+                if (err === "SecurityError" || err === "NotAllowedError") cacheDisabled = true;
+                finish(null, null);
+            };
+        } catch (e) { 
+            if (e.name === "SecurityError" || e.name === "NotAllowedError") cacheDisabled = true;
+            finish(null, null); 
+        }
     }
 
     function writeCache(db, key, data) {
+        if (cacheDisabled) return;
         try {
             const tx = db.transaction("engines", "readwrite");
             tx.objectStore("engines").put(data, key);
-        } catch (e) {}
+            tx.onerror = (e) => {
+                const err = e.target?.error?.name;
+                if (err === "SecurityError" || err === "NotAllowedError" || err === "QuotaExceededError") cacheDisabled = true;
+            };
+        } catch (e) { 
+            if (e.name === "SecurityError" || e.name === "NotAllowedError" || e.name === "QuotaExceededError") cacheDisabled = true;
+        }
     }
 
     function writeCacheAsync(db, key, data) {
+        if (cacheDisabled) return Promise.resolve();
         return new Promise((resolve) => {
             let done = false;
             const finish = () => { if (!done) { done = true; clearTimeout(timer); resolve(); } };
-            const timer = setTimeout(finish, 4000);
+            const timer = setTimeout(finish, 2000); // Reduced from 4s to 2s
             try {
                 const tx = db.transaction("engines", "readwrite");
                 tx.objectStore("engines").put(data, key);
                 tx.oncomplete = () => finish();
-                tx.onerror = () => finish();
-            } catch (e) { finish(); }
+                tx.onerror = (e) => {
+                    const err = e.target?.error?.name;
+                    if (err === "SecurityError" || err === "NotAllowedError" || err === "QuotaExceededError") cacheDisabled = true;
+                    finish();
+                };
+            } catch (e) { 
+                if (e.name === "SecurityError" || e.name === "NotAllowedError" || e.name === "QuotaExceededError") cacheDisabled = true;
+                finish(); 
+            }
         });
     }
 
@@ -1796,28 +1837,108 @@ self.onmessage = function(e) {
     }
 
     // ─── Download helpers ─────────────────────────────────────────────────────
+    // Enhanced with fetch() fallback for environments where GM_xmlhttpRequest is restricted
     function xhrText(url, cb, errCb) {
-        GM_xmlhttpRequest({
-            method: "GET", url, timeout: 30000,
-            onload: (r) => {
-                if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                cb(r.responseText);
-            },
-            onerror: (e) => errCb(new Error("Network error: " + url)),
-            ontimeout: () => errCb(new Error("Timeout: " + url)),
-        });
+        const startTime = performance.now();
+        console.log(`[SF Engine] Downloading JS: ${url}`);
+        let completed = false;
+        const finish = (fn) => { if (!completed) { completed = true; fn(); } };
+        
+        // Try GM_xmlhttpRequest first (works in userscript context)
+        if (typeof GM_xmlhttpRequest !== "undefined") {
+            GM_xmlhttpRequest({
+                method: "GET", url, timeout: 60000, // Increased timeout for large files
+                onload: (r) => {
+                    finish(() => {
+                        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+                        if (r.status >= 400) { errCb(new Error(`HTTP ${r.status} for ${url}`)); return; }
+                        console.log(`[SF Engine] JS downloaded in ${elapsed}s (${r.responseText.length} chars)`);
+                        cb(r.responseText);
+                    });
+                },
+                onerror: (e) => finish(() => {
+                    console.warn(`[SF Engine] GM_xmlhttpRequest failed, trying fetch(): ${e}`);
+                    fetchFallback();
+                }),
+                ontimeout: () => finish(() => {
+                    console.warn(`[SF Engine] GM_xmlhttpRequest timeout, trying fetch()`);
+                    fetchFallback();
+                }),
+            });
+        } else {
+            fetchFallback();
+        }
+        
+        function fetchFallback() {
+            if (completed) return;
+            fetch(url, { cache: "no-cache" })
+                .then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+                    return r.text();
+                })
+                .then(text => {
+                    finish(() => {
+                        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+                        console.log(`[SF Engine] JS downloaded via fetch in ${elapsed}s (${text.length} chars)`);
+                        cb(text);
+                    });
+                })
+                .catch(e => {
+                    finish(() => errCb(new Error(`Both GM_xmlhttpRequest and fetch failed: ${e.message}`)));
+                });
+        }
     }
 
     function xhrBinary(url, cb, errCb) {
-        GM_xmlhttpRequest({
-            method: "GET", url, responseType: "arraybuffer", timeout: 30000,
-            onload: (r) => {
-                if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                cb(new Uint8Array(r.response));
-            },
-            onerror: (e) => errCb(new Error("Binary download failed: " + url)),
-            ontimeout: () => errCb(new Error("Binary timeout: " + url)),
-        });
+        const startTime = performance.now();
+        console.log(`[SF Engine] Downloading WASM: ${url}`);
+        let completed = false;
+        const finish = (fn) => { if (!completed) { completed = true; fn(); } };
+        
+        if (typeof GM_xmlhttpRequest !== "undefined") {
+            GM_xmlhttpRequest({
+                method: "GET", url, responseType: "arraybuffer", timeout: 120000, // 2 min for 112MB
+                onload: (r) => {
+                    finish(() => {
+                        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+                        if (r.status >= 400) { errCb(new Error(`HTTP ${r.status} for ${url}`)); return; }
+                        const bytes = new Uint8Array(r.response);
+                        console.log(`[SF Engine] WASM downloaded in ${elapsed}s (${bytes.length} bytes)`);
+                        cb(bytes);
+                    });
+                },
+                onerror: (e) => finish(() => {
+                    console.warn(`[SF Engine] GM_xmlhttpRequest failed, trying fetch(): ${e}`);
+                    fetchFallback();
+                }),
+                ontimeout: () => finish(() => {
+                    console.warn(`[SF Engine] GM_xmlhttpRequest timeout, trying fetch()`);
+                    fetchFallback();
+                }),
+            });
+        } else {
+            fetchFallback();
+        }
+        
+        function fetchFallback() {
+            if (completed) return;
+            fetch(url, { cache: "no-cache" })
+                .then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+                    return r.arrayBuffer();
+                })
+                .then(buffer => {
+                    finish(() => {
+                        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+                        const bytes = new Uint8Array(buffer);
+                        console.log(`[SF Engine] WASM downloaded via fetch in ${elapsed}s (${bytes.length} bytes)`);
+                        cb(bytes);
+                    });
+                })
+                .catch(e => {
+                    finish(() => errCb(new Error(`Both GM_xmlhttpRequest and fetch failed: ${e.message}`)));
+                });
+        }
     }
 
     // ─── Main load entry point ────────────────────────────────────────────────
@@ -2198,6 +2319,10 @@ self.onmessage = function(e) {
         setEngineStatus("loading", "Clearing cache...");
         state.engineModuleCacheBroken = false;
         state.engineModuleKey = null;
+        
+        // Also reset cacheDisabled flag to allow fresh IndexedDB attempt
+        cacheDisabled = false;
+        
         openCache((dbErr, db) => {
             if (!db) { loadLocalEngine(); return; }
             // Delete JS, WASM, patched blob, compiled module, and legacy keys, then reload
@@ -2212,6 +2337,22 @@ self.onmessage = function(e) {
                 )
             );
         });
+    }
+    
+    // Force complete cache reset (for debugging Brave Containers issues)
+    function forceReinstall() {
+        cacheDisabled = false;
+        state.engineModuleCacheBroken = false;
+        state.engineModuleKey = null;
+        state.engineLoadGeneration++;
+        state.engineRetryAt = 0;
+        if (state.localEngine) {
+            try { state.localEngine.terminate(); } catch (e) {}
+            state.localEngine = null;
+        }
+        state.engineLoadingInProgress = false;
+        setEngineStatus("loading", "Force reinstalling...");
+        loadLocalEngine();
     }
 
     function uninstallEngine() {
@@ -3281,10 +3422,9 @@ function triggerAutoMove(fen = null) {
     }
 
     function updateLocalSettingsUI() {
-        const statusEl     = document.getElementById("localEngineStatus");
-        const statusMsgEl  = document.getElementById("localEngineStatusMsg");
         const btnInstall   = document.getElementById("btnLocalInstall");
         const btnReinstall = document.getElementById("btnLocalReinstall");
+        const btnForceReinstall = document.getElementById("btnLocalForceReinstall");
         const btnUninstall = document.getElementById("btnLocalUninstall");
         if (!statusEl) return;
 
@@ -3304,9 +3444,10 @@ function triggerAutoMove(fen = null) {
 
         const isLoading = state.engineStatus === "loading";
         const isReady   = state.engineStatus === "ready";
-        if (btnInstall)   btnInstall.disabled   = isReady || isLoading;
-        if (btnReinstall) btnReinstall.disabled  = isLoading;
-        if (btnUninstall) btnUninstall.disabled  = !isReady && !isLoading;
+        if (btnInstall)         btnInstall.disabled   = isReady || isLoading;
+        if (btnReinstall)       btnReinstall.disabled  = isLoading;
+        if (btnForceReinstall)  btnForceReinstall.disabled = isLoading;
+        if (btnUninstall)       btnUninstall.disabled  = !isReady && !isLoading;
 
         // ── Model caps → show/hide option rows ──
         const show = (id, visible) => {
@@ -4104,6 +4245,7 @@ function triggerAutoMove(fen = null) {
                             <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
                                 <button id="btnLocalInstall"   class="local-action-btn local-btn-install">Install / Load</button>
                                 <button id="btnLocalReinstall" class="local-action-btn local-btn-reinstall">Reinstall</button>
+                                <button id="btnLocalForceReinstall" class="local-action-btn local-btn-force-reinstall" title="Clear all cache, reset IndexedDB disabled flag, force fresh download">Force Reinstall</button>
                                 <button id="btnLocalUninstall" class="local-action-btn local-btn-uninstall">Uninstall</button>
                             </div>
                             <div style="font-size:0.7em; color:#666; margin-top:6px;">Each model is cached separately. Switching models requires Install / Load.</div>
@@ -4319,6 +4461,7 @@ pvSettings: document.getElementById("pvSettings"),
 
         document.getElementById("btnLocalInstall").onclick   = () => { state.engineRetryAt = 0; loadLocalEngine(); updateLocalSettingsUI(); };
         document.getElementById("btnLocalReinstall").onclick = () => reinstallEngine();
+        document.getElementById("btnLocalForceReinstall").onclick = () => { if (confirm("Force reinstall? This clears ALL cache, resets IndexedDB disabled flag, and forces a fresh download.")) forceReinstall(); };
         document.getElementById("btnLocalUninstall").onclick = () => { if (confirm("Uninstall local engine and clear cache?")) uninstallEngine(); };
 
         // ── Model selector ─────────────────────────────────────────────────
