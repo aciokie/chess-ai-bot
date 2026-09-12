@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot
 // @namespace http://tampermonkey.net/
-// @version          11.13.26
+// @version          11.13.27
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1493,9 +1493,11 @@ self.onmessage = function(e) {
         }
     }
 };
-`;
-        const blob = new Blob([bootstrapCode], { type: "application/javascript" });
-        const worker = new Worker(URL.createObjectURL(blob));
+`; 
+        // Use data: URL for worker script to avoid extension context blob URL issues
+        const bootstrapB64 = btoa(bootstrapCode);
+        const workerDataUrl = `data:application/javascript;base64,${bootstrapB64}`;
+        const worker = new Worker(workerDataUrl);
         if (moduleMode) {
             worker.postMessage({ __type: "launch-module", jsCode: jsCode, wasmModule: compiledModule }, [compiledModule]);
         } else {
@@ -1507,8 +1509,9 @@ self.onmessage = function(e) {
 
     // Build a Worker from a pure asm.js JS string (for old SF 6/8/10/11)
     function buildAsmJsEngine(jsCode) {
-        const blob = new Blob([jsCode], { type: "application/javascript" });
-        return new Worker(URL.createObjectURL(blob));
+        const jsB64 = btoa(jsCode);
+        const workerDataUrl = `data:application/javascript;base64,${jsB64}`;
+        return new Worker(workerDataUrl);
     }
 
     function buildEs6ModuleEngine(jsCode, wasmBytes) {
@@ -1520,20 +1523,18 @@ self.onmessage = function(e) {
         const wasmB64 = wasmBytes ? bytesToBase64(wasmBytes) : (SF19_SMALLNET_WASM_B64 || null);
         const jsB64 = SF19_SMALLNET_JS_B64 || null;
         
-        // Create blob URLs for both JS and WASM (more reliable than data: URLs in module workers)
-        const jsBlob = jsB64 ? new Blob([Uint8Array.from(atob(jsB64), c => c.charCodeAt(0))], { type: "application/javascript" }) : new Blob([jsCode], { type: "application/javascript" });
-        const wasmBlob = wasmB64 ? new Blob([Uint8Array.from(atob(wasmB64), c => c.charCodeAt(0))], { type: "application/wasm" }) : null;
-        const jsBlobUrl = URL.createObjectURL(jsBlob);
-        const wasmBlobUrl = wasmBlob ? URL.createObjectURL(wasmBlob) : null;
+        // Create data URLs for both JS and WASM (avoids extension context blob URL issues)
+        const jsDataUrl = jsB64 ? `data:application/javascript;base64,${jsB64}` : `data:application/javascript;base64,${btoa(jsCode)}`;
+        const wasmDataUrl = wasmB64 ? `data:application/wasm;base64,${wasmB64}` : null;
         
-        // Pass both blob URLs in moduleArg - locateFile for normal loading, instantiateWasm as fallback
-        const moduleArgStr = wasmBlobUrl 
-            ? `{ locateFile: (path, prefix) => { if (path.endsWith('.wasm')) return '${wasmBlobUrl}'; return prefix + path; }, instantiateWasm: (imports, successCallback) => { fetch('${wasmBlobUrl}').then(r => r.arrayBuffer()).then(bytes => WebAssembly.instantiate(bytes, imports)).then(result => successCallback(result.instance, result.module)).catch(e => { console.error('[SF Worker] instantiateWasm failed:', e); throw e; }); return {}; } }` 
+        // Pass both data URLs in moduleArg - locateFile for normal loading, instantiateWasm as fallback
+        const moduleArgStr = wasmDataUrl 
+            ? `{ locateFile: (path, prefix) => { if (path.endsWith('.wasm')) return '${wasmDataUrl}'; return prefix + path; }, instantiateWasm: (imports, successCallback) => { fetch('${wasmDataUrl}').then(r => r.arrayBuffer()).then(bytes => WebAssembly.instantiate(bytes, imports)).then(result => successCallback(result.instance, result.module)).catch(e => { console.error('[SF Worker] instantiateWasm failed:', e); throw e; }); return {}; } }` 
             : '{}';
 
 const moduleLoader = `
             // ES6 Module Stockfish Loader (SF19 Smallnet from lichess stockfish-web)
-            const moduleUrl = '${jsBlobUrl}';
+            const moduleUrl = '${jsDataUrl}';
             const createStockfish = (await import(moduleUrl)).default;
             
             let engine = null;
