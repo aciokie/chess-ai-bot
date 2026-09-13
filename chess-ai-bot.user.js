@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.10
+// @version          11.14.11
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -120,8 +120,8 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
     //
     // Per-model settings are persisted under keys like "m_sf18_05_hashMB" so
     // each model remembers its own last-used values independently.
-    const LOCAL_ENGINES = [
-{
+const LOCAL_ENGINES = [
+        {
             id:      "sf18_05",
             cacheKey: "sf18_05",
             label:   "Stockfish 18.0.5",
@@ -129,6 +129,12 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             format:  "wasm",
             jsUrl:   "https://cdn.jsdelivr.net/npm/stockfish@18.0.5/bin/stockfish-18-single.js",
             wasmUrl: "https://cdn.jsdelivr.net/npm/stockfish@18.0.5/bin/stockfish-18-single.wasm",
+            wasmUrls: [
+                "https://cdn.jsdelivr.net/npm/stockfish@18.0.5/bin/stockfish-18-single.wasm",
+                "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm",
+                "https://raw.githubusercontent.com/lichess-org/stockfish.wasm/master/stockfish-18-single.wasm",
+                "https://github.com/official-stockfish/Stockfish/releases/download/sf_18/stockfish-18-single.wasm"
+            ],
             // Capabilities
             maxDepth:        25,
             hasHash:         true,
@@ -153,6 +159,11 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             format:  "wasm",
             jsUrl:   "https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.js",
             wasmUrl: "https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",
+            wasmUrls: [
+                "https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",
+                "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",
+                "https://raw.githubusercontent.com/lichess-org/stockfish.wasm/master/stockfish-nnue-16-single.wasm"
+            ],
             maxDepth:        25,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -161,7 +172,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasNNUE:         true,
             hasWDL:          true,
             hasContempt:     true,   // SF 14+ has Contempt
-            hasAnalysisContempt: true, // SF 16 >= 14
+            hasAnalysisContempt: true, // SF 14+ has Analysis Contempt option
             hasMinThink:     false,  // removed in SF 12
             hasRepetition:   true,   // SF 14+ anti-repetition
             defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
@@ -175,6 +186,11 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             format:  "wasm",
             jsUrl:   "https://cdn.jsdelivr.net/npm/stockfish@15.1.0/src/stockfish-nnue-15-single.js",
             wasmUrl: "https://cdn.jsdelivr.net/npm/stockfish@15.1.0/src/stockfish-nnue-15-single.wasm",
+            wasmUrls: [
+                "https://cdn.jsdelivr.net/npm/stockfish@15.1.0/src/stockfish-nnue-15-single.wasm",
+                "https://unpkg.com/stockfish@15.1.0/src/stockfish-nnue-15-single.wasm",
+                "https://raw.githubusercontent.com/lichess-org/stockfish.wasm/master/stockfish-nnue-15-single.wasm"
+            ],
             maxDepth:        24,
             hasHash:         true,
             hasMoveOverhead: true,
@@ -197,6 +213,11 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             format:  "wasm",
             jsUrl:   "https://cdn.jsdelivr.net/npm/stockfish@11.0.0/src/stockfish.js",
             wasmUrl: "https://cdn.jsdelivr.net/npm/stockfish@11.0.0/src/stockfish.wasm",
+            wasmUrls: [
+                "https://cdn.jsdelivr.net/npm/stockfish@11.0.0/src/stockfish.wasm",
+                "https://unpkg.com/stockfish@11.0.0/src/stockfish.wasm",
+                "https://raw.githubusercontent.com/lichess-org/stockfish.wasm/master/stockfish.wasm"
+            ],
             maxDepth:        20,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -219,6 +240,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             format:  "asmjs",
             jsUrl:   "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js",
             wasmUrl: null,
+            wasmUrls: null,
             maxDepth:        20,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -241,6 +263,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             format:  "asmjs",
             jsUrl:   "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/9.0.0/stockfish.js",
             wasmUrl: null,
+            wasmUrls: null,
             maxDepth:        18,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -1981,6 +2004,42 @@ self.onmessage = function(e) {
 
                 const fetchWasm = (resolve, reject) => {
                     if (!m.wasmUrl) { logLoadPhase("WASM_SKIP", "No WASM URL for this model"); resolve(null); return; }
+                    
+                    // Try multiple URLs with retries
+                    const urls = m.wasmUrls || [m.wasmUrl];
+                    const maxRetries = 2; // Try each URL up to 2 times
+                    
+                    const tryDownload = (urlIndex, retryCount) => {
+                        if (urlIndex >= urls.length) {
+                            reject(new Error(`All ${urls.length} WASM URLs failed after ${maxRetries} retries each`));
+                            return;
+                        }
+                        const url = urls[urlIndex];
+                        logLoadPhase("WASM_DOWNLOAD_ATTEMPT", `URL ${urlIndex + 1}/${urls.length} (retry ${retryCount + 1}/${maxRetries + 1}): ${url}`);
+                        wasmDownloadStartTime = performance.now();
+                        
+                        xhrBinary(url, 
+                            (bytes) => { 
+                                if (!isCurrentLoad()) return; 
+                                logLoadPhase("WASM_DOWNLOAD_OK", `${(bytes.length/1024/1024).toFixed(2)} MB in ${((performance.now() - wasmDownloadStartTime)/1000).toFixed(2)}s from ${url}`);
+                                if (db) writeCacheAsync(db, wasmKey, bytes); 
+                                resolve(bytes); 
+                            },
+                            (e) => { 
+                                if (!isCurrentLoad()) return; 
+                                logLoadPhase("WASM_DOWNLOAD_FAILED", `${e.message} (URL: ${url})`);
+                                if (retryCount < maxRetries) {
+                                    // Retry same URL
+                                    setTimeout(() => tryDownload(urlIndex, retryCount + 1), 1000);
+                                } else if (urlIndex + 1 < urls.length) {
+                                    // Try next URL
+                                    setTimeout(() => tryDownload(urlIndex + 1, 0), 1000);
+                                } else {
+                                    reject(new Error(`WASM download failed after ${maxRetries + 1} attempts on all ${urls.length} URLs. Last error: ${e.message || e}. URLs tried: ${urls.join(", ")}`));
+                                }
+                            });
+                    };
+                    
                     if (db) {
                         logLoadPhase("CACHE_READ", `Reading WASM cache: ${wasmKey}`);
                         readCache(db, wasmKey, (_, cachedWasm) => {
@@ -1989,28 +2048,13 @@ self.onmessage = function(e) {
                                 logLoadPhase("CACHE_HIT_WASM", `Found cached WASM (${(cachedWasm.length/1024/1024).toFixed(2)} MB)`);
                                 resolve(cachedWasm);
                             } else {
-                                logLoadPhase("CACHE_MISS_WASM", `Downloading from ${m.wasmUrl}`);
-                                wasmDownloadStartTime = performance.now();
-                                xhrBinary(m.wasmUrl, (bytes) => { 
-                                    if (!isCurrentLoad()) return; 
-                                    logLoadPhase("WASM_DOWNLOAD_OK", `${(bytes.length/1024/1024).toFixed(2)} MB in ${((performance.now() - wasmDownloadStartTime)/1000).toFixed(2)}s`);
-                                    writeCacheAsync(db, wasmKey, bytes); 
-                                    resolve(bytes); 
-                                },
-                                (e) => { 
-                                    if (!isCurrentLoad()) return; 
-                                    logLoadPhase("WASM_DOWNLOAD_FAILED", e.message);
-                                    reject(new Error(`WASM download failed: ${e.message || e}. URL: ${m.wasmUrl}. Check: 1) Network 2) unpkg.com 3) ~113MB download allowed`)); 
-                                });
+                                logLoadPhase("CACHE_MISS_WASM", `Starting multi-URL download from ${urls.length} sources`);
+                                tryDownload(0, 0);
                             }
                         });
                     } else {
-                        logLoadPhase("CACHE_SKIP_WASM", `No IndexedDB, downloading from ${m.wasmUrl}`);
-                        wasmDownloadStartTime = performance.now();
-                        xhrBinary(m.wasmUrl, resolve, (e) => { 
-                            logLoadPhase("WASM_DOWNLOAD_FAILED", e.message);
-                            reject(new Error(`WASM download failed (no DB): ${e.message || e}. URL: ${m.wasmUrl}`)); 
-                        });
+                        logLoadPhase("CACHE_SKIP_WASM", `No IndexedDB, starting multi-URL download`);
+                        tryDownload(0, 0);
                     }
                 };
 
