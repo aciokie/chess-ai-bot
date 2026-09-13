@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.3
+// @version          11.14.4
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1667,6 +1667,15 @@ self.onmessage = function(e) {
 
     // ─── Download helpers ─────────────────────────────────────────────────────
     function xhrText(url, cb, errCb) {
+        // In Brave Containers, prefer fetch() from page context
+        const useFetchFirst = isBraveContainer || typeof GM_xmlhttpRequest === "undefined";
+        
+        if (useFetchFirst) {
+            console.log(`[SF Engine] Brave Container detected - using fetch() directly for text download`);
+            fetchTextFallback();
+            return;
+        }
+        
         let useGM = true;
         try {
             GM_xmlhttpRequest({
@@ -1692,7 +1701,7 @@ self.onmessage = function(e) {
         function fetchTextFallback() {
             fetch(url, { 
                 cache: "no-cache", 
-                credentials: "same-origin",
+                credentials: "omit",
                 mode: "cors"
             })
                 .then(r => {
@@ -1708,41 +1717,48 @@ self.onmessage = function(e) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 120000); // 2 min for 113MB
         
-        // Try GM_xmlhttpRequest first (works in Violentmonkey/Tampermonkey)
-        let useGM = true;
-        try {
-            GM_xmlhttpRequest({
-                method: "GET", url, responseType: "arraybuffer", timeout: 120000,
-                onload: (r) => {
-                    clearTimeout(timeout);
-                    if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                    cb(new Uint8Array(r.response));
-                },
-                onerror: (e) => {
-                    clearTimeout(timeout);
-                    console.warn(`[SF Engine] GM_xmlhttpRequest failed, trying fetch(): ${e}`);
-                    fetchFallback();
-                },
-                ontimeout: () => {
-                    clearTimeout(timeout);
-                    console.warn(`[SF Engine] GM_xmlhttpRequest timeout, trying fetch()`);
-                    fetchFallback();
-                },
-            });
-        } catch (e) {
-            console.warn(`[SF Engine] GM_xmlhttpRequest not available, using fetch(): ${e}`);
-            fetchFallback();
+        // In Brave Containers, GM_xmlhttpRequest creates blob URLs in the extension context
+        // which are not accessible from the page context (origin-keyed agent clusters).
+        // Use fetch() directly from page context instead.
+        const useFetchFirst = isBraveContainer || typeof GM_xmlhttpRequest === "undefined";
+        
+        if (useFetchFirst) {
+            console.log(`[SF Engine] Brave Container detected - using fetch() directly for WASM download`);
+            fetchBinaryFallback();
+        } else {
+            // Try GM_xmlhttpRequest first (works in Violentmonkey/Tampermonkey)
+            let useGM = true;
+            try {
+                GM_xmlhttpRequest({
+                    method: "GET", url, responseType: "arraybuffer", timeout: 120000,
+                    onload: (r) => {
+                        clearTimeout(timeout);
+                        if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
+                        cb(new Uint8Array(r.response));
+                    },
+                    onerror: (e) => {
+                        clearTimeout(timeout);
+                        console.warn(`[SF Engine] GM_xmlhttpRequest failed, trying fetch(): ${e}`);
+                        fetchBinaryFallback();
+                    },
+                    ontimeout: () => {
+                        clearTimeout(timeout);
+                        console.warn(`[SF Engine] GM_xmlhttpRequest timeout, trying fetch()`);
+                        fetchBinaryFallback();
+                    },
+                });
+            } catch (e) {
+                console.warn(`[SF Engine] GM_xmlhttpRequest not available, using fetch(): ${e}`);
+                fetchBinaryFallback();
+            }
         }
         
-        function fetchFallback() {
-            if (!useGM) return;
-            useGM = false;
-            clearTimeout(timeout);
+        function fetchBinaryFallback() {
             fetch(url, { 
                 cache: "no-cache", 
                 signal: controller.signal,
-                credentials: "same-origin", // Required for Brave container network partitioning
-                mode: "cors" // Allow cross-origin if needed
+                credentials: "omit", // No credentials for cross-origin CDN
+                mode: "cors" // Allow cross-origin
             })
                 .then(r => {
                     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1751,7 +1767,7 @@ self.onmessage = function(e) {
                 .then(buffer => cb(new Uint8Array(buffer)))
                 .catch(e => {
                     if (e.name === 'AbortError') return;
-                    errCb(new Error(`Both GM_xmlhttpRequest and fetch failed: ${e.message}`));
+                    errCb(new Error(`fetch() failed: ${e.message}`));
                 });
         }
     }
