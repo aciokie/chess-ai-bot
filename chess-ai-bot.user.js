@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.2
+// @version          11.14.3
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -55,6 +55,26 @@
 
     const DEFAULT_WASM_URL = "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm";
 const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-installs";
+
+    // Detect Brave Containers (each container has isolated storage/network)
+    const isBraveContainer = (() => {
+        try {
+            // Check if we're in a Brave container by testing storage partitioning
+            if (typeof indexedDB !== "undefined") {
+                const testReq = indexedDB.open("__brave_container_test__", 1);
+                testReq.onsuccess = () => { testReq.result.close(); };
+                testReq.onerror = () => {};
+            }
+        } catch (e) {}
+        // Check for Brave-specific indicators
+        return navigator.userAgent.includes("Brave") && 
+               (window.chrome?.webstore?.onInstallStageChanged || 
+                window.navigator.brave?.isBrave ||
+                document.documentElement.getAttribute("data-brave-container") === "true");
+    })();
+
+    // Log container status
+    if (isBraveContainer) console.log("[SF Engine] Running in Brave Container - storage/network partitioned");
 
     // ─── Local Engine Registry ──
     // Each entry describes one loadable local engine variant.
@@ -1381,19 +1401,25 @@ WebAssembly.instantiate = function(bufferOrModule, imports) {
     });
 };
 self.postMessage("__probe:bootstrap-ready");
-var _probeCount = 0;
-setInterval(function(){ self.postMessage("__probe:beacon " + Math.round(performance.now())); }, 3000);
 var _logFetch = function(u) { if (_probeCount++ < 20) self.postMessage("__probe:fetch " + String(u)); };
-self.fetch = function(url, opts) {
-    _logFetch(url);
-    return Promise.resolve({
-        ok: true,
-        arrayBuffer: function() {
-            self.postMessage("__probe:arrayBuffer-read n=" + (_wasmBytes ? _wasmBytes.length : 0));
-            return Promise.resolve(_wasmBytes.buffer);
-        }
-    });
-};
+        // Store the original fetch to pass through non-WASM requests
+        var _origFetch = self.fetch;
+        self.fetch = function(url, opts) {
+            _logFetch(url);
+            // Only mock the exact WASM URL being loaded
+            var wasmUrlStr = String(url);
+            if (wasmUrlStr.indexOf(".wasm") !== -1 && _wasmBytes) {
+                return Promise.resolve({
+                    ok: true,
+                    arrayBuffer: function() {
+                        self.postMessage("__probe:arrayBuffer-read n=" + _wasmBytes.length);
+                        return Promise.resolve(_wasmBytes.buffer);
+                    }
+                });
+            }
+            // Pass through all other requests to the real fetch
+            return _origFetch(url, opts);
+        };
 self.onmessage = function(e) {
     var d = e.data || {};
     if (d.__type === "launch" || d.__type === "launch-module") {
@@ -1545,8 +1571,13 @@ self.onmessage = function(e) {
     }
 
     // ─── Cache helpers ────────────────────────────────────────────────────────
+    // Brave Containers: each container has its own IndexedDB partition.
+    // The cache will be empty in a new container — handle gracefully.
+    let cacheDisabled = false;
+
     function openCache(cb) {
         if (typeof indexedDB === "undefined" || !indexedDB) { cb(new Error("IndexedDB unavailable"), null); return; }
+        if (cacheDisabled) { cb(new Error("Cache disabled"), null); return; }
         let settled = false;
         let dbReq = null;
         try {
@@ -1558,6 +1589,7 @@ self.onmessage = function(e) {
         const timer = setTimeout(() => {
             if (settled) return;
             settled = true;
+            cacheDisabled = true; // Disable cache on timeout (common in containers)
             cb(new Error("IndexedDB open timed out"), null);
         }, 5000);
         dbReq.onupgradeneeded = (e) => {
@@ -1565,29 +1597,45 @@ self.onmessage = function(e) {
             if (!db.objectStoreNames.contains("engines")) db.createObjectStore("engines");
         };
         dbReq.onsuccess = (e) => { if (settled) return; settled = true; clearTimeout(timer); cb(null, e.target.result); };
-        dbReq.onerror = () => { if (settled) return; settled = true; clearTimeout(timer); cb(new Error("IndexedDB open failed"), null); };
-        dbReq.onblocked = () => { if (settled) return; settled = true; clearTimeout(timer); cb(new Error("IndexedDB open blocked — continuing without cache"), null); };
+        dbReq.onerror = (e) => { if (settled) return; settled = true; clearTimeout(timer); 
+            const err = e.target?.error?.name || "IndexedDB open failed";
+            if (err === "SecurityError" || err === "NotAllowedError") cacheDisabled = true; // Container/private mode
+            cb(new Error(err), null); };
+        dbReq.onblocked = () => { if (settled) return; settled = true; clearTimeout(timer); 
+            cacheDisabled = true; // Container blocking access
+            cb(new Error("IndexedDB open blocked — continuing without cache"), null); };
     }
 
     function readCache(db, key, cb) {
+        if (cacheDisabled) { cb(null, null); return; }
         let done = false;
         const finish = (err, val) => { if (!done) { done = true; clearTimeout(timer); cb(err, val); } };
-        const timer = setTimeout(() => finish(new Error("readCache timed out"), null), 4000);
+        const timer = setTimeout(() => finish(null, null), 4000);
         try {
             const req = db.transaction("engines", "readonly").objectStore("engines").get(key);
             req.onsuccess = (e) => finish(null, e.target.result || null);
-            req.onerror = () => finish(null, null);
+            req.onerror = (e) => {
+                const err = e.target?.error?.name;
+                if (err === "SecurityError" || err === "NotAllowedError") cacheDisabled = true;
+                finish(null, null);
+            };
         } catch (e) { finish(null, null); }
     }
 
     function writeCache(db, key, data) {
+        if (cacheDisabled) return;
         try {
             const tx = db.transaction("engines", "readwrite");
             tx.objectStore("engines").put(data, key);
-        } catch (e) {}
+            tx.onerror = (e) => {
+                const err = e.target?.error?.name;
+                if (err === "SecurityError" || err === "NotAllowedError" || err === "QuotaExceededError") cacheDisabled = true;
+            };
+        } catch (e) { if (e.name === "SecurityError" || e.name === "NotAllowedError" || e.name === "QuotaExceededError") cacheDisabled = true; }
     }
 
     function writeCacheAsync(db, key, data) {
+        if (cacheDisabled) return Promise.resolve();
         return new Promise((resolve) => {
             let done = false;
             const finish = () => { if (!done) { done = true; clearTimeout(timer); resolve(); } };
@@ -1596,8 +1644,15 @@ self.onmessage = function(e) {
                 const tx = db.transaction("engines", "readwrite");
                 tx.objectStore("engines").put(data, key);
                 tx.oncomplete = () => finish();
-                tx.onerror = () => finish();
-            } catch (e) { finish(); }
+                tx.onerror = (e) => {
+                    const err = e.target?.error?.name;
+                    if (err === "SecurityError" || err === "NotAllowedError" || err === "QuotaExceededError") cacheDisabled = true;
+                    finish();
+                };
+            } catch (e) { 
+                if (e.name === "SecurityError" || e.name === "NotAllowedError" || e.name === "QuotaExceededError") cacheDisabled = true;
+                finish(); 
+            }
         });
     }
 
@@ -1612,15 +1667,41 @@ self.onmessage = function(e) {
 
     // ─── Download helpers ─────────────────────────────────────────────────────
     function xhrText(url, cb, errCb) {
-        GM_xmlhttpRequest({
-            method: "GET", url, timeout: 30000,
-            onload: (r) => {
-                if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                cb(r.responseText);
-            },
-            onerror: (e) => errCb(new Error("Network error: " + url)),
-            ontimeout: () => errCb(new Error("Timeout: " + url)),
-        });
+        let useGM = true;
+        try {
+            GM_xmlhttpRequest({
+                method: "GET", url, timeout: 30000,
+                onload: (r) => {
+                    if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
+                    cb(r.responseText);
+                },
+                onerror: (e) => {
+                    console.warn(`[SF Engine] GM_xmlhttpRequest failed, trying fetch(): ${e}`);
+                    fetchTextFallback();
+                },
+                ontimeout: () => {
+                    console.warn(`[SF Engine] GM_xmlhttpRequest timeout, trying fetch()`);
+                    fetchTextFallback();
+                },
+            });
+        } catch (e) {
+            console.warn(`[SF Engine] GM_xmlhttpRequest not available, using fetch(): ${e}`);
+            fetchTextFallback();
+        }
+        
+        function fetchTextFallback() {
+            fetch(url, { 
+                cache: "no-cache", 
+                credentials: "same-origin",
+                mode: "cors"
+            })
+                .then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.text();
+                })
+                .then(text => cb(text))
+                .catch(e => errCb(new Error(`Both GM_xmlhttpRequest and fetch failed: ${e.message}`)));
+        }
     }
 
     function xhrBinary(url, cb, errCb) {
@@ -1657,7 +1738,12 @@ self.onmessage = function(e) {
             if (!useGM) return;
             useGM = false;
             clearTimeout(timeout);
-            fetch(url, { cache: "no-cache", signal: controller.signal })
+            fetch(url, { 
+                cache: "no-cache", 
+                signal: controller.signal,
+                credentials: "same-origin", // Required for Brave container network partitioning
+                mode: "cors" // Allow cross-origin if needed
+            })
                 .then(r => {
                     if (!r.ok) throw new Error(`HTTP ${r.status}`);
                     return r.arrayBuffer();
