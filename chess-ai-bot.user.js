@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.11
+// @version          11.14.12
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -143,8 +143,8 @@ const LOCAL_ENGINES = [
             hasSkillLevel:   true,
             hasNNUE:         true,
             hasWDL:          true,
-            hasContempt:     true,   // SF 14+ has Contempt
-            hasAnalysisContempt: true, // SF 14+ has Analysis Contempt option
+            hasContempt:     false,  // REMOVED in SF 16+
+            hasAnalysisContempt: false, // REMOVED in SF 16+
             hasMinThink:     false,  // removed in SF 12
             hasRepetition:   true,   // SF 14+ anti-repetition
             // Per-model defaults
@@ -171,8 +171,8 @@ const LOCAL_ENGINES = [
             hasSkillLevel:   true,
             hasNNUE:         true,
             hasWDL:          true,
-            hasContempt:     true,   // SF 14+ has Contempt
-            hasAnalysisContempt: true, // SF 14+ has Analysis Contempt option
+            hasContempt:     false,  // REMOVED in SF 16+
+            hasAnalysisContempt: false, // REMOVED in SF 16+
             hasMinThink:     false,  // removed in SF 12
             hasRepetition:   true,   // SF 14+ anti-repetition
             defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
@@ -198,8 +198,8 @@ const LOCAL_ENGINES = [
             hasSkillLevel:   true,
             hasNNUE:         true,
             hasWDL:          true,
-            hasContempt:     true,
-            hasAnalysisContempt: true,
+            hasContempt:     true,   // SF 15 has Contempt
+            hasAnalysisContempt: true, // SF 15 has Analysis Contempt
             hasMinThink:     false,
             hasRepetition:   true,
             defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
@@ -1394,8 +1394,8 @@ const getMoveWinPct = (cp, mate) => {
         if (m.hasContempt) cmds.push(`setoption name Contempt value ${settings.localContempt}`);
         cmds.push("setoption name MultiPV value 1");
         // Anti-draw (always-on, cannot be turned off):
-        // Force Contempt=100 to strongly prefer winning over drawing (ALL engines SF9+).
-        // Force Analysis Contempt=Both so contempt applies to both sides (SF14+ only).
+        // Force Contempt=100 to strongly prefer winning over drawing (SF9-15 only).
+        // Force Analysis Contempt=Both so contempt applies to both sides (SF14-15 only).
         if (m.hasContempt) {
             cmds.push(`setoption name Contempt value 100`);
             if (m.hasAnalysisContempt) {
@@ -4965,7 +4965,8 @@ pvSettings: document.getElementById("pvSettings"),
     setupBoardObserver();
     scheduleBackupPoll();
     startGameOverPoll();
-    AntiDraw.start();
+    // AntiDraw now works purely via engine UCI options and processBestMove()
+    // No MutationObserver needed
     if (typeof GM_xmlhttpRequest === "function") {
         let ver = "";
         try { if (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) ver = String(GM_info.script.version); } catch (e) {}
