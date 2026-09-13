@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.8
+// @version          11.14.9
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -377,7 +377,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         timeManagement: true,
         humanizer: false,
         humanizeRate: 15,
-        autoRematch: false,
+        autoRematch: true,
         // ─── Bullet Mode ──
         bulletMode: false,
     };
@@ -3801,9 +3801,6 @@ function triggerAutoMove(fen = null) {
 <label>Humanize Rate (%)</label>
                                 <input type="number" id="inpHumanizeRate" min="5" max="80" value="${settings.humanizeRate}" style="width:60px;">
                             </div>
-                            <div class="auto-checks" style="margin-top:4px;">
-                                <label><input type="checkbox" id="chkRematch" ${settings.autoRematch ? "checked" : ""}> Auto-Rematch</label>
-                            </div>
                     </div>
 
                     <div class="sect">
@@ -4585,7 +4582,7 @@ pvSettings: document.getElementById("pvSettings"),
     }
 
     function attemptRematch() {
-        if (!settings.autoRematch) return;
+        // Always auto-accept every rematch offer
         if (state._justResetForNewGame) { state._justResetForNewGame = false; return; }
         const resultEl = document.querySelector(".game-result-component, .game-over-modal-content, .daily-game-footer-game-over");
         if (!resultEl || !isElVisible(resultEl)) { state.rematchAttempted = false; if (state.rematchTimeout) { clearTimeout(state.rematchTimeout); state.rematchTimeout = null; } return; }
@@ -4606,6 +4603,11 @@ pvSettings: document.getElementById("pvSettings"),
                             return true;
                         }
                     }
+                }
+                // Also accept "play again" or "new game" buttons after game over
+                if ((txt === "play again" || txt === "new game" || txt === "new opponent" || txt === "find new opponent") && isElVisible(b)) {
+                    b.click();
+                    return true;
                 }
             }
             return false;
@@ -4864,83 +4866,6 @@ pvSettings: document.getElementById("pvSettings"),
             };
         },
 
-        // Decline draw offers from opponent
-        declineDrawOffer() {
-            if (this._declining) return;
-            this._declining = true;
-            setTimeout(() => { this._declining = false; }, 2000);
-            const btns = document.querySelectorAll("button");
-            for (const b of btns) {
-                const txt = (b.innerText || "").toLowerCase().trim();
-                if ((txt.includes("decline") || txt.includes("no thanks") || txt.includes("no, thanks")) && isElVisible(b)) {
-                    console.log(`[SF Engine] Anti-draw: auto-declining draw offer`);
-                    b.click();
-                    return true;
-                }
-            }
-            const lichessDecline = document.querySelector(".confirm .decline, .buttons .decline");
-            if (lichessDecline && isElVisible(lichessDecline)) {
-                console.log(`[SF Engine] Anti-draw: auto-declining draw offer (Lichess)`);
-                lichessDecline.click();
-                return true;
-            }
-            return false;
-        },
-
-        // Hide our own draw button
-        hideDrawButton() {
-            const btns = document.querySelectorAll("button");
-            for (const b of btns) {
-                const txt = (b.innerText || "").toLowerCase().trim();
-                if ((txt === "draw" || txt === "offer draw" || txt === "offer a draw") && isElVisible(b)) {
-                    b.style.opacity = "0.3";
-                    b.style.pointerEvents = "none";
-                    b.title = "Draw offers disabled (anti-draw)";
-                }
-            }
-        },
-
-        // Auto-decline "Claim Draw" dialogs (50-move, 3-fold)
-        declineDrawClaim() {
-            const btns = document.querySelectorAll("button");
-            for (const b of btns) {
-                const txt = (b.innerText || "").toLowerCase().trim();
-                if ((txt.includes("claim") && txt.includes("draw")) && isElVisible(b)) {
-                    // Find a decline/no button nearby
-                    const parent = b.parentElement;
-                    if (parent) {
-                        const siblings = parent.querySelectorAll("button");
-                        for (const s of siblings) {
-                            const st = (s.innerText || "").toLowerCase().trim();
-                            if (st.includes("decline") || st.includes("no") || st === "cancel") {
-                                console.log(`[SF Engine] Anti-draw: declining draw claim`);
-                                s.click();
-                                return true;
-                            }
-                        }
-                    }
-                    // If no decline button, just prevent clicking the claim button
-                    b.style.opacity = "0.3";
-                    b.style.pointerEvents = "none";
-                    return true;
-                }
-            }
-            return false;
-        },
-
-        start() {
-            if (this.observer) return;
-            this.observer = new MutationObserver(() => {
-                this.declineDrawOffer();
-                this.declineDrawClaim();
-                this.hideDrawButton();
-            });
-            this.observer.observe(document.body, { childList: true, subtree: true });
-            this.declineDrawOffer();
-            this.declineDrawClaim();
-            this.hideDrawButton();
-            console.log(`[SF Engine] Anti-draw: active (all draw rules countered)`);
-        },
         stop() {
             if (this.observer) { this.observer.disconnect(); this.observer = null; }
         }
