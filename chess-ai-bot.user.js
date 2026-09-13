@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.0
+// @version          11.14.1
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1396,8 +1396,9 @@ self.onmessage = function(e) {
     }
 };
 `;
-        const blob = new Blob([bootstrapCode], { type: "application/javascript" });
-        const worker = new Worker(URL.createObjectURL(blob));
+                const bootstrapB64 = btoa(bootstrapCode);
+        const workerDataUrl = `data:application/javascript;base64,${bootstrapB64}`;
+        const worker = new Worker(workerDataUrl);
         if (moduleMode) {
             worker.postMessage({ __type: "launch-module", jsCode: jsCode, wasmModule: compiledModule }, [compiledModule]);
         } else {
@@ -1409,8 +1410,9 @@ self.onmessage = function(e) {
 
     // Build a Worker from a pure asm.js JS string (for old SF 6/8/10/11)
     function buildAsmJsEngine(jsCode) {
-        const blob = new Blob([jsCode], { type: "application/javascript" });
-        return new Worker(URL.createObjectURL(blob));
+        const jsB64 = btoa(jsCode);
+        const workerDataUrl = `data:application/javascript;base64,${jsB64}`;
+        return new Worker(workerDataUrl);
     }
 
     function finalizeEngine(modelId) {
@@ -1601,15 +1603,50 @@ self.onmessage = function(e) {
     }
 
     function xhrBinary(url, cb, errCb) {
-        GM_xmlhttpRequest({
-            method: "GET", url, responseType: "arraybuffer", timeout: 30000,
-            onload: (r) => {
-                if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                cb(new Uint8Array(r.response));
-            },
-            onerror: (e) => errCb(new Error("Binary download failed: " + url)),
-            ontimeout: () => errCb(new Error("Binary timeout: " + url)),
-        });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 120000); // 2 min for 113MB
+        
+        // Try GM_xmlhttpRequest first (works in Violentmonkey/Tampermonkey)
+        let useGM = true;
+        try {
+            GM_xmlhttpRequest({
+                method: "GET", url, responseType: "arraybuffer", timeout: 120000,
+                onload: (r) => {
+                    clearTimeout(timeout);
+                    if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
+                    cb(new Uint8Array(r.response));
+                },
+                onerror: (e) => {
+                    clearTimeout(timeout);
+                    console.warn(`[SF Engine] GM_xmlhttpRequest failed, trying fetch(): ${e}`);
+                    fetchFallback();
+                },
+                ontimeout: () => {
+                    clearTimeout(timeout);
+                    console.warn(`[SF Engine] GM_xmlhttpRequest timeout, trying fetch()`);
+                    fetchFallback();
+                },
+            });
+        } catch (e) {
+            console.warn(`[SF Engine] GM_xmlhttpRequest not available, using fetch(): ${e}`);
+            fetchFallback();
+        }
+        
+        function fetchFallback() {
+            if (!useGM) return;
+            useGM = false;
+            clearTimeout(timeout);
+            fetch(url, { cache: "no-cache", signal: controller.signal })
+                .then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.arrayBuffer();
+                })
+                .then(buffer => cb(new Uint8Array(buffer)))
+                .catch(e => {
+                    if (e.name === 'AbortError') return;
+                    errCb(new Error(`Both GM_xmlhttpRequest and fetch failed: ${e.message}`));
+                });
+        }
     }
 
     // ─── Main load entry point ────────────────────────────────────────────────
