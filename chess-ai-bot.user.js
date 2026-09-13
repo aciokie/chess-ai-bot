@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.1
+// @version          11.14.2
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -91,10 +91,10 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             id:      "sf18_05",
             cacheKey: "sf18_05",
             label:   "Stockfish 18.0.5",
-            cdn:     "unpkg",
+            cdn:     "jsdelivr",
             format:  "wasm",
-            jsUrl:   "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.js",
-            wasmUrl: "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm",
+            jsUrl:   "https://cdn.jsdelivr.net/npm/stockfish@18.0.5/bin/stockfish-18-single.js",
+            wasmUrl: "https://cdn.jsdelivr.net/npm/stockfish@18.0.5/bin/stockfish-18-single.wasm",
             // Capabilities
             maxDepth:        25,
             hasHash:         true,
@@ -114,10 +114,10 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             id:      "sf16_00",
             cacheKey: "sf16_00",
             label:   "Stockfish 16.0",
-            cdn:     "unpkg",
+            cdn:     "jsdelivr",
             format:  "wasm",
-            jsUrl:   "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.js",
-            wasmUrl: "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",
+            jsUrl:   "https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.js",
+            wasmUrl: "https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",
             maxDepth:        25,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -132,13 +132,34 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
                         limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
         },
         {
+            id:      "sf15_00",
+            cacheKey: "sf15_00",
+            label:   "Stockfish 15.1 (fast, smaller WASM)",
+            cdn:     "jsdelivr",
+            format:  "wasm",
+            jsUrl:   "https://cdn.jsdelivr.net/npm/stockfish@15.1.0/src/stockfish-nnue-15-single.js",
+            wasmUrl: "https://cdn.jsdelivr.net/npm/stockfish@15.1.0/src/stockfish-nnue-15-single.wasm",
+            maxDepth:        24,
+            hasHash:         true,
+            hasMoveOverhead: true,
+            hasSlowMover:    true,
+            hasSkillLevel:   true,
+            hasNNUE:         true,
+            hasWDL:          true,
+            hasContempt:     true,
+            hasMinThink:     false,
+            hasRepetition:   true,
+            defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
+                        limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
+        },
+        {
             id:      "sf11_00",
             cacheKey: "sf11_00",
             label:   "Stockfish 11.0",
-            cdn:     "unpkg",
+            cdn:     "jsdelivr",
             format:  "wasm",
-            jsUrl:   "https://unpkg.com/stockfish@11.0.0/src/stockfish.js",
-            wasmUrl: "https://unpkg.com/stockfish@11.0.0/src/stockfish.wasm",
+            jsUrl:   "https://cdn.jsdelivr.net/npm/stockfish@11.0.0/src/stockfish.js",
+            wasmUrl: "https://cdn.jsdelivr.net/npm/stockfish@11.0.0/src/stockfish.wasm",
             maxDepth:        20,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
