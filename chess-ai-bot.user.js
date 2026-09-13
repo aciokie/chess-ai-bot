@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.9
+// @version          11.14.10
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1348,6 +1348,13 @@ const getMoveWinPct = (cp, mate) => {
     // ─── MULTI-MODEL ENGINE CORE ──────────────────────────────────────────────
 
     // Send UCI init commands appropriate for the selected engine model
+    // Anti-draw features work on ALL engines (SF9-18):
+    // - Contempt=100: All engines SF9+ support Contempt option
+    // - Analysis Contempt=Both: SF14+ only (hasAnalysisContempt)
+    // - Depth boost (50/75-move): computeSmartDepth() works for all
+    // - Stalemate avoidance: processBestMove() works for all
+    // - Insufficient material: processBestMove() works for all
+    // - Halfmove clock tracking: AntiDraw.getHalfmoveClock() works for all
     function sendEngineInitCommands(eng) {
         const m = getEngineById(eng || settings.localModelId);
         const cmds = ["ucinewgame"];
@@ -1364,8 +1371,8 @@ const getMoveWinPct = (cp, mate) => {
         if (m.hasContempt) cmds.push(`setoption name Contempt value ${settings.localContempt}`);
         cmds.push("setoption name MultiPV value 1");
         // Anti-draw (always-on, cannot be turned off):
-        // Force Contempt=100 to strongly prefer winning over drawing.
-        // Force Analysis Contempt=Both so contempt applies to both sides (SF 14+ only).
+        // Force Contempt=100 to strongly prefer winning over drawing (ALL engines SF9+).
+        // Force Analysis Contempt=Both so contempt applies to both sides (SF14+ only).
         if (m.hasContempt) {
             cmds.push(`setoption name Contempt value 100`);
             if (m.hasAnalysisContempt) {
