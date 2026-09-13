@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.12
+// @version          11.14.13
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1605,6 +1605,10 @@ self.onmessage = function(e) {
         } else if (msg.includes("out of memory") || msg.includes("OOM")) {
             errorType = "Out of Memory";
             suggestion = "WASM too large (112MB). Close other tabs, reload page.";
+        } else {
+            // Worker crashed unexpectedly during play - likely after mate
+            errorType = "Worker Crashed";
+            suggestion = "Worker died unexpectedly. Auto-restarting engine...";
         }
 
         const fullError = `[${errorType}] ${msg} at ${filename}:${lineno}:${colno}. Suggestion: ${suggestion}`;
@@ -1618,6 +1622,14 @@ self.onmessage = function(e) {
         state.localEngine = null;
         state.engineLoadingInProgress = false;
         state.engineRetryAt = Date.now() + 15000;
+        
+        // Auto-restart engine after crash (especially after mate sequence)
+        setTimeout(() => {
+            if (!state.localEngine && state.engineStatus === "error") {
+                console.log(`[SF Engine] Auto-restarting engine after crash...`);
+                loadLocalEngine();
+            }
+        }, 2000);
     }
 
     // ─── Cache helpers ────────────────────────────────────────────────────────
@@ -2785,7 +2797,12 @@ self.onmessage = function(e) {
             </div>`;
         if (settings.autoMove && isFinal) triggerAutoMove(fen);
         else if (settings.bulletMode && isFinal && normMate !== null && normMate > 0 && state.currentBestMove && state.currentPV.length >= 3) {
-            if (isOurTurnNow()) {
+            // Check if engine worker is still alive before queuing premoves
+            if (!state.localEngine || state.engineStatus !== "ready") {
+                console.warn(`[SF Engine] Bullet mate sequence aborted: engine worker died (status=${state.engineStatus})`);
+                state.isThinking = false;
+                loadLocalEngine();
+            } else if (isOurTurnNow()) {
                 playMove(state.currentBestMove, fen);
                 const nextOurMove = state.currentPV[2];
                 if (nextOurMove) {
@@ -2892,14 +2909,22 @@ self.onmessage = function(e) {
     };
 
 function triggerAutoMove(fen = null) {
-     if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] triggerAutoMove aborted: no bestMove or no board`); return; }
-     const tn = state.board.game.getTurn();
-     const pa = state.board.game.getPlayingAs();
-     const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
-     const paNum = (pa === 1 || pa === "w" || pa === "white") ? 1 : 2;
-     if (turnNum !== paNum) { console.warn(`[SF Engine] triggerAutoMove aborted: not our turn (turn=${turnNum}, playingAs=${paNum})`); return; }
+if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] triggerAutoMove aborted: no bestMove or no board`); return; }
+      const tn = state.board.game.getTurn();
+      const pa = state.board.game.getPlayingAs();
+      const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
+      const paNum = (pa === 1 || pa === "w" || pa === "white") ? 1 : 2;
+      if (turnNum !== paNum) { console.warn(`[SF Engine] triggerAutoMove aborted: not our turn (turn=${turnNum}, playingAs=${paNum})`); return; }
 
-     // Race condition guard: verify the board hasn't changed since THIS analysis
+      // Check if engine worker is still alive
+      if (!state.localEngine || state.engineStatus !== "ready") {
+          console.warn(`[SF Engine] triggerAutoMove aborted: engine not ready (status=${state.engineStatus}, hasEngine=${!!state.localEngine})`);
+          state.isThinking = false;
+          loadLocalEngine();
+          return;
+      }
+
+      // Race condition guard: verify the board hasn't changed since THIS analysis
      // started. `fen` is the exact position this move was computed for (captured
      // at dispatch), NOT the shared lastSentFEN — a newer analyze() overwrites
      // lastSentFEN, which let stale final callbacks stroke the wrong squares.
@@ -3017,6 +3042,17 @@ function triggerAutoMove(fen = null) {
     function playMove(move, fen = null, playingAs = null) {
         console.log(`[SF Engine] playMove: ${move}`);
         if (!state.board?.game) { console.warn(`[SF Engine] playMove aborted: no board`); return; }
+        
+        // Check if engine worker is still alive before playing
+        if (!state.localEngine || state.engineStatus !== "ready") {
+            console.warn(`[SF Engine] playMove aborted: engine not ready (status=${state.engineStatus}, hasEngine=${!!state.localEngine})`);
+            state.isThinking = false;
+            state.pendingLocalFEN = fen;
+            state.pendingLocalDepth = 1;
+            loadLocalEngine();
+            return;
+        }
+        
         // Final turn check at execution time
         const tn = state.board.game.getTurn();
         const pa = playingAs !== null ? playingAs : state.board.game.getPlayingAs();
