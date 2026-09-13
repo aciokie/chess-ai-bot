@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.5
+// @version          11.14.6
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -107,7 +107,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
     // Per-model settings are persisted under keys like "m_sf18_05_hashMB" so
     // each model remembers its own last-used values independently.
     const LOCAL_ENGINES = [
-        {
+{
             id:      "sf18_05",
             cacheKey: "sf18_05",
             label:   "Stockfish 18.0.5",
@@ -115,11 +115,11 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             format:  "wasm",
             jsUrl:   "https://cdn.jsdelivr.net/npm/stockfish@18.0.5/bin/stockfish-18-single.js",
             wasmUrl: "https://cdn.jsdelivr.net/npm/stockfish@18.0.5/bin/stockfish-18-single.wasm",
-// Capabilities
+            // Capabilities
             maxDepth:        25,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
-            hasSlowMover:    true,   // present through SF 16
+            hasSlowMover:    false,  // removed in SF 17
             hasSkillLevel:   true,
             hasNNUE:         true,
             hasWDL:          true,
@@ -147,6 +147,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasNNUE:         true,
             hasWDL:          true,
             hasContempt:     true,   // SF 14+ has Contempt
+            hasAnalysisContempt: true, // SF 16 >= 14
             hasMinThink:     false,  // removed in SF 12
             hasRepetition:   true,   // SF 14+ anti-repetition
             defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
@@ -284,9 +285,9 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         rematchAttempted: false,
         rematchTimeout: null,
         _justResetForNewGame: false,
-            lastSeenFEN: "",
-            playingAs: null,
-            inStartPositionReset: false,
+        lastSeenFEN: "",
+        playingAs: null,
+        inStartPositionReset: false,
         visuals: [],
         pendingAnalysis: null,
         pendingLocalFEN: null,
@@ -455,7 +456,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         loadModelSettings(settings.localModelId || "sf18_05");
     }
     // --- UTILITIES ---
-    const getRandomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+    const getRandomInt = (min, max) => { if (min > max) [min, max] = [max, min]; return Math.floor(Math.random() * (max - min + 1)) + min; };
     const log = (...args) => { if (settings?.debugLogs) console.log(...args); };
 
     // Anti-cheat: occasionally delay analysis start by a short random amount (subtle, not annoying)
@@ -1783,12 +1784,12 @@ self.onmessage = function(e) {
             console.log(`[SF Engine] loadLocalEngine skipped: localEngine=${!!state.localEngine}, loadingInProgress=${state.engineLoadingInProgress}`);
             return;
         }
-    if (state.engineRetryAt && Date.now() < state.engineRetryAt) {
-        console.log(`[SF Engine] loadLocalEngine skipped: retry cooldown active (${Math.ceil((state.engineRetryAt - Date.now()) / 1000)}s left)`);
-        state.isThinking = false;
-        state.lastSanitizedBoardFEN = "";
-        return;
-    }
+        if (state.engineRetryAt && Date.now() < state.engineRetryAt) {
+            console.log(`[SF Engine] loadLocalEngine skipped: retry cooldown active (${Math.ceil((state.engineRetryAt - Date.now()) / 1000)}s left)`);
+            state.isThinking = false;
+            state.lastSanitizedBoardFEN = "";
+            return;
+        }
         const loadGeneration = ++state.engineLoadGeneration;
         const isCurrentLoad = () => state.engineLoadGeneration === loadGeneration;
         console.log(`[SF Engine] loadLocalEngine START`);
@@ -2336,7 +2337,6 @@ self.onmessage = function(e) {
     if (!state.localEngine || state.engineStatus !== "ready") {
         console.warn(`[SF Engine] Cannot analyze: engine not ready (status=${state.engineStatus}, hasEngine=${!!state.localEngine})`);
         state.isThinking = false;
-        state.lastSanitizedBoardFEN = "";
         state.pendingLocalFEN = fen;
         state.pendingLocalDepth = depth;
         if (!state.localEngine) loadLocalEngine();
