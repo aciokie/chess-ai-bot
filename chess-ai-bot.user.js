@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.7
+// @version          11.14.8
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -56,25 +56,39 @@
     const DEFAULT_WASM_URL = "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm";
 const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-installs";
 
-    // Detect Brave Containers (each container has isolated storage/network)
-    const isBraveContainer = (() => {
+    // Detect Brave Containers and other partitioned contexts (incognito, Firefox containers, etc.)
+    // These contexts partition storage and network, making extension blob URLs inaccessible
+    const isPartitionedContext = (() => {
         try {
-            // Check if we're in a Brave container by testing storage partitioning
+            // Check for Brave-specific indicators
+            if (navigator.userAgent.includes("Brave")) {
+                if (window.chrome?.webstore?.onInstallStageChanged || 
+                    window.navigator.brave?.isBrave ||
+                    document.documentElement.getAttribute("data-brave-container") === "true") {
+                    return true;
+                }
+            }
+            // Check for Firefox Multi-Account Containers
+            if (navigator.userAgent.includes("Firefox") && 
+                (window.chrome?.runtime?.id || document.documentElement.getAttribute("data-container-id"))) {
+                return true;
+            }
+            // Check if we're in an incognito/private mode
+            if (typeof chrome !== "undefined" && chrome.extension?.inIncognitoContext) {
+                return true;
+            }
+            // Try to detect storage partitioning via IndexedDB
             if (typeof indexedDB !== "undefined") {
-                const testReq = indexedDB.open("__brave_container_test__", 1);
+                const testReq = indexedDB.open("__partition_test__", 1);
                 testReq.onsuccess = () => { testReq.result.close(); };
                 testReq.onerror = () => {};
             }
         } catch (e) {}
-        // Check for Brave-specific indicators
-        return navigator.userAgent.includes("Brave") && 
-               (window.chrome?.webstore?.onInstallStageChanged || 
-                window.navigator.brave?.isBrave ||
-                document.documentElement.getAttribute("data-brave-container") === "true");
+        return false;
     })();
 
-    // Log container status
-    if (isBraveContainer) console.log("[SF Engine] Running in Brave Container - storage/network partitioned");
+    // Log partitioned context status
+    if (isPartitionedContext) console.log("[SF Engine] Running in partitioned context (Brave Container/incognito/Firefox Container) - storage/network isolated");
 
     // ─── Local Engine Registry ──
     // Each entry describes one loadable local engine variant.
@@ -1672,12 +1686,16 @@ self.onmessage = function(e) {
     }
 
     // ─── Download helpers ─────────────────────────────────────────────────────
+    // For large binary downloads (WASM ~113MB), ALWAYS prefer fetch() from page context.
+    // GM_xmlhttpRequest creates blob URLs in the extension context which are NOT accessible
+    // from the page context in partitioned environments (Brave Containers, incognito,
+    // Firefox containers) due to origin-keyed agent clusters and storage partitioning.
     function xhrText(url, cb, errCb) {
-        // In Brave Containers, prefer fetch() from page context
-        const useFetchFirst = isBraveContainer || typeof GM_xmlhttpRequest === "undefined";
+        // For text downloads, fetch() is also more reliable
+        const useFetchFirst = isPartitionedContext || typeof GM_xmlhttpRequest === "undefined";
         
         if (useFetchFirst) {
-            console.log(`[SF Engine] Brave Container detected - using fetch() directly for text download`);
+            console.log(`[SF Engine] Partitioned context detected - using fetch() directly for text download`);
             fetchTextFallback();
             return;
         }
@@ -1723,41 +1741,13 @@ self.onmessage = function(e) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 120000); // 2 min for 113MB
         
-        // In Brave Containers, GM_xmlhttpRequest creates blob URLs in the extension context
-        // which are not accessible from the page context (origin-keyed agent clusters).
-        // Use fetch() directly from page context instead.
-        const useFetchFirst = isBraveContainer || typeof GM_xmlhttpRequest === "undefined";
-        
-        if (useFetchFirst) {
-            console.log(`[SF Engine] Brave Container detected - using fetch() directly for WASM download`);
-            fetchBinaryFallback();
-        } else {
-            // Try GM_xmlhttpRequest first (works in Violentmonkey/Tampermonkey)
-            let useGM = true;
-            try {
-                GM_xmlhttpRequest({
-                    method: "GET", url, responseType: "arraybuffer", timeout: 120000,
-                    onload: (r) => {
-                        clearTimeout(timeout);
-                        if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                        cb(new Uint8Array(r.response));
-                    },
-                    onerror: (e) => {
-                        clearTimeout(timeout);
-                        console.warn(`[SF Engine] GM_xmlhttpRequest failed, trying fetch(): ${e}`);
-                        fetchBinaryFallback();
-                    },
-                    ontimeout: () => {
-                        clearTimeout(timeout);
-                        console.warn(`[SF Engine] GM_xmlhttpRequest timeout, trying fetch()`);
-                        fetchBinaryFallback();
-                    },
-                });
-            } catch (e) {
-                console.warn(`[SF Engine] GM_xmlhttpRequest not available, using fetch(): ${e}`);
-                fetchBinaryFallback();
-            }
-        }
+        // ALWAYS prefer fetch() for large binary downloads (WASM ~113MB)
+        // GM_xmlhttpRequest creates blob URLs in the extension context which are
+        // NOT accessible from the page context in partitioned environments
+        // (Brave Containers, incognito, Firefox containers) due to 
+        // origin-keyed agent clusters and network partitioning.
+        console.log(`[SF Engine] Using fetch() directly for WASM download (avoids extension blob URL partitioning)`);
+        fetchBinaryFallback();
         
         function fetchBinaryFallback() {
             fetch(url, { 
@@ -1767,12 +1757,14 @@ self.onmessage = function(e) {
                 mode: "cors" // Allow cross-origin
             })
                 .then(r => {
+                    clearTimeout(timeout);
                     if (!r.ok) throw new Error(`HTTP ${r.status}`);
                     return r.arrayBuffer();
                 })
                 .then(buffer => cb(new Uint8Array(buffer)))
                 .catch(e => {
                     if (e.name === 'AbortError') return;
+                    clearTimeout(timeout);
                     errCb(new Error(`fetch() failed: ${e.message}`));
                 });
         }
