@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.4
+// @version          11.14.5
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -115,15 +115,16 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             format:  "wasm",
             jsUrl:   "https://cdn.jsdelivr.net/npm/stockfish@18.0.5/bin/stockfish-18-single.js",
             wasmUrl: "https://cdn.jsdelivr.net/npm/stockfish@18.0.5/bin/stockfish-18-single.wasm",
-            // Capabilities
+// Capabilities
             maxDepth:        25,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
-            hasSlowMover:    false,  // removed in SF 17
+            hasSlowMover:    true,   // present through SF 16
             hasSkillLevel:   true,
-            hasNNUE:         true,   // UCI_LimitStrength + UCI_Elo
-            hasWDL:          true,   // UCI_ShowWDL
-            hasContempt:     true,   // SF 14+ has Contempt (default 24, range -100..100)
+            hasNNUE:         true,
+            hasWDL:          true,
+            hasContempt:     true,   // SF 14+ has Contempt
+            hasAnalysisContempt: true, // SF 14+ has Analysis Contempt option
             hasMinThink:     false,  // removed in SF 12
             hasRepetition:   true,   // SF 14+ anti-repetition
             // Per-model defaults
@@ -167,6 +168,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasNNUE:         true,
             hasWDL:          true,
             hasContempt:     true,
+            hasAnalysisContempt: true,
             hasMinThink:     false,
             hasRepetition:   true,
             defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
@@ -188,6 +190,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasNNUE:         false,  // classical HCE eval
             hasWDL:          false,
             hasContempt:     true,   // present through SF 13
+            hasAnalysisContempt: false, // SF 11 < 14
             hasMinThink:     true,   // present through SF 11
             hasRepetition:   false,  // SF < 14
             defaults: { hashMB: 32, moveOverhead: 100, slowMover: 100, skillLevel: 20,
@@ -209,6 +212,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasNNUE:         false,
             hasWDL:          false,
             hasContempt:     true,
+            hasAnalysisContempt: false,
             hasMinThink:     true,   // present through SF 11
             hasRepetition:   false,  // SF < 14
             defaults: { hashMB: 32, moveOverhead: 100, slowMover: 100, skillLevel: 20,
@@ -230,6 +234,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasNNUE:         false,
             hasWDL:          false,
             hasContempt:     true,
+            hasAnalysisContempt: false,
             hasMinThink:     true,   // present through SF 11
             hasRepetition:   false,  // SF < 14
             defaults: { hashMB: 16, moveOverhead: 100, slowMover: 100, skillLevel: 20,
@@ -1345,10 +1350,12 @@ const getMoveWinPct = (cp, mate) => {
         cmds.push("setoption name MultiPV value 1");
         // Anti-draw (always-on, cannot be turned off):
         // Force Contempt=100 to strongly prefer winning over drawing.
-        // Force Analysis Contempt=Both so contempt applies to both sides.
+        // Force Analysis Contempt=Both so contempt applies to both sides (SF 14+ only).
         if (m.hasContempt) {
             cmds.push(`setoption name Contempt value 100`);
-            cmds.push(`setoption name Analysis Contempt value Both`);
+            if (m.hasAnalysisContempt) {
+                cmds.push(`setoption name Analysis Contempt value Both`);
+            }
         }
         cmds.forEach(c => state.localEngine.postMessage(c));
         state.lastMultiPV = 1;
@@ -1373,6 +1380,7 @@ const getMoveWinPct = (cp, mate) => {
 var _wasmBytes = null;
 var _wasmModule = null;
 var _modulePosted = false;
+var _probeCount = 0;
 var _origInstantiate = WebAssembly.instantiate;
 WebAssembly.instantiate = function(bufferOrModule, imports) {
     var args = arguments;
@@ -1402,24 +1410,21 @@ WebAssembly.instantiate = function(bufferOrModule, imports) {
 };
 self.postMessage("__probe:bootstrap-ready");
 var _logFetch = function(u) { if (_probeCount++ < 20) self.postMessage("__probe:fetch " + String(u)); };
-        // Store the original fetch to pass through non-WASM requests
-        var _origFetch = self.fetch;
-        self.fetch = function(url, opts) {
-            _logFetch(url);
-            // Only mock the exact WASM URL being loaded
-            var wasmUrlStr = String(url);
-            if (wasmUrlStr.indexOf(".wasm") !== -1 && _wasmBytes) {
-                return Promise.resolve({
-                    ok: true,
-                    arrayBuffer: function() {
-                        self.postMessage("__probe:arrayBuffer-read n=" + _wasmBytes.length);
-                        return Promise.resolve(_wasmBytes.buffer);
-                    }
-                });
+self.fetch = function(url, opts) {
+    _logFetch(url);
+    // Mock all fetches when WASM bytes are available (Stockfish only fetches WASM once during init)
+    if (_wasmBytes) {
+        return Promise.resolve({
+            ok: true,
+            arrayBuffer: function() {
+                self.postMessage("__probe:arrayBuffer-read n=" + _wasmBytes.length);
+                return Promise.resolve(_wasmBytes.buffer);
             }
-            // Pass through all other requests to the real fetch
-            return _origFetch(url, opts);
-        };
+        });
+    }
+    // Before WASM bytes are set, pass through to real fetch
+    return fetch(url, opts);
+};
 self.onmessage = function(e) {
     var d = e.data || {};
     if (d.__type === "launch" || d.__type === "launch-module") {
