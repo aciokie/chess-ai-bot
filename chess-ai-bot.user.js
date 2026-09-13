@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.6
+// @version          11.14.7
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1778,6 +1778,25 @@ self.onmessage = function(e) {
         }
     }
 
+    // ─── Detailed Engine Load Logging ────────────────────────────────────────────
+    let loadStartTime = 0;
+    let downloadStartTime = 0;
+    let jsDownloadStartTime = 0;
+    let wasmDownloadStartTime = 0;
+
+    function logLoadPhase(phase, details = "") {
+        const elapsed = ((performance.now() - loadStartTime) / 1000).toFixed(2);
+        console.log(`[SF Engine] 📥 [${elapsed}s] ${phase}${details ? ": " + details : ""}`);
+    }
+
+    function logDownloadProgress(label, loaded, total, startTime) {
+        const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+        const mb = total ? (loaded / 1024 / 1024).toFixed(2) + " / " + (total / 1024 / 1024).toFixed(2) + " MB" : (loaded / 1024 / 1024).toFixed(2) + " MB";
+        const pct = total ? ((loaded / total) * 100).toFixed(1) + "%" : "";
+        const speed = total ? (loaded / 1024 / 1024 / (elapsed || 0.001)).toFixed(2) + " MB/s" : "";
+        console.log(`[SF Engine] 📥 [${elapsed}s] ${label}: ${mb} ${pct} ${speed}`);
+    }
+
     // ─── Main load entry point ────────────────────────────────────────────────
     function loadLocalEngine() {
         if (state.localEngine || state.engineLoadingInProgress) {
@@ -1792,23 +1811,22 @@ self.onmessage = function(e) {
         }
         const loadGeneration = ++state.engineLoadGeneration;
         const isCurrentLoad = () => state.engineLoadGeneration === loadGeneration;
-        console.log(`[SF Engine] loadLocalEngine START`);
+        
+        loadStartTime = performance.now();
+        logLoadPhase("START", `model=${settings.localModelId || "sf18_05"}`);
+        
         state.engineLoadingInProgress = true;
         state.isThinking = false;
         const modelId = settings.localModelId || "sf18_05";
         const m = getEngineById(modelId);
         const label = m.format === "asmjs" ? `${m.label} (asm.js)` : m.label;
-        console.log(`[SF Engine] Loading model: ${label} (id=${modelId}, format=${m.format})`);
-        console.debug(`[SF Engine] Model URLs: jsUrl=${m.jsUrl}, wasmUrl=${m.wasmUrl}`);
+        logLoadPhase("MODEL", `${label} (id=${modelId}, format=${m.format})`);
+        logLoadPhase("URLS", `jsUrl=${m.jsUrl}, wasmUrl=${m.wasmUrl}`);
         setEngineStatus("loading", "Checking cache...");
         state.lastMoveResult = `⏳ Loading ${label}...`;
         updateUI();
 
-        // Last-resort safety net: every earlier step (IDB open, cache reads) is
-        // timeout-guarded, but if anything unforeseen stalls the chain, this
-        // fires once after 120s of "loading" with no worker built and reports a
-        // real error instead of leaving the engine stuck loading forever
-        // (incognito/private mode often blocks or stalls IndexedDB).
+        // Last-resort safety net
         if (state.engineLoadWatchdog) { clearTimeout(state.engineLoadWatchdog); state.engineLoadWatchdog = null; }
         state.engineLoadWatchdog = setTimeout(() => {
             state.engineLoadWatchdog = null;
@@ -1824,62 +1842,75 @@ self.onmessage = function(e) {
             }
         }, 300000);
 
+        logLoadPhase("CACHE_OPEN", "Opening IndexedDB...");
         openCache((dbErr, db) => {
             if (!isCurrentLoad()) return;
             if (dbErr) {
-                console.warn(`[SF Engine] IndexedDB open failed (continuing without cache):`, dbErr);
+                logLoadPhase("CACHE_OPEN_FAILED", dbErr.message);
+            } else {
+                logLoadPhase("CACHE_OPEN_OK", db ? "connected" : "unavailable");
             }
-            console.log(`[SF Engine] IndexedDB ${db ? 'opened' : 'unavailable'}`);
 
             if (m.format === "asmjs") {
                 // ── asm.js path: XHR the JS text, build Worker directly ──────
                 const launch = (jsCode) => {
                     if (!isCurrentLoad()) return;
                     try {
-                        console.log(`[SF Engine] Building asm.js worker...`);
+                        logLoadPhase("WORKER_BUILD", "Building asm.js worker...");
                         state.localEngine = buildAsmJsEngine(jsCode);
                         state.localEngine.onerror = onEngineWorkerError;
                         state.localEngine.onmessage = handleLocalMessage;
-                        console.log(`[SF Engine] asm.js worker created, finalizing...`);
+                        logLoadPhase("WORKER_BUILT", "asm.js worker created, finalizing...");
                         finalizeEngine(modelId);
                     } catch (e) {
+                        logLoadPhase("WORKER_BUILD_FAILED", e.message);
                         console.error(`[SF Engine] Failed to build asm.js worker:`, e);
                         state.engineLoadingInProgress = false;
                         setEngineStatus("error", e.message || "Build failed");
                     }
                 };
                 if (db) {
-                        readCache(db, m.cacheKey, (_, cached) => {
-                            if (!isCurrentLoad()) return;
-                            if (cached) {
-                                console.log(`[SF Engine] Found cached JS, loading from cache...`);
-                                setEngineStatus("loading", "Loading from cache...");
-                                launch(cached);
-                            } else {
-                                console.log(`[SF Engine] No cache, downloading JS from ${m.jsUrl}...`);
-                                setEngineStatus("loading", "Downloading JS...");
-                                xhrText(m.jsUrl,
-                                    (js) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] JS downloaded (${js.length} chars), caching...`); if (db) writeCache(db, m.cacheKey, js); launch(js); },
-                                    (e)  => {
-                                        if (!isCurrentLoad()) return;
-                                        const err = `JS download failed: ${e.message || e}. URL: ${m.jsUrl}. Check: 1) Network connectivity 2) unpkg.com accessible 3) GM_xmlhttpRequest allowed`;
-                                        console.error(`[SF Engine] ${err}`);
-                                        state.engineLoadingInProgress = false;
-                                        setEngineStatus("error", err);
-                                    }
-                                );
-                            }
-                        });
-                    } else {
-                        console.log(`[SF Engine] No IndexedDB, downloading JS directly...`);
-                        xhrText(m.jsUrl, launch, (e) => {
-                            if (!isCurrentLoad()) return;
-                            const err = `JS download failed (no DB): ${e.message || e}. URL: ${m.jsUrl}. Check network.`;
-                            console.error(`[SF Engine] ${err}`);
-                            state.engineLoadingInProgress = false;
-                            setEngineStatus("error", err);
-                        });
-                    }
+                    logLoadPhase("CACHE_READ", `Reading cache key: ${m.cacheKey}`);
+                    readCache(db, m.cacheKey, (_, cached) => {
+                        if (!isCurrentLoad()) return;
+                        if (cached) {
+                            logLoadPhase("CACHE_HIT", `Found cached JS (${cached.length} chars)`);
+                            setEngineStatus("loading", "Loading from cache...");
+                            launch(cached);
+                        } else {
+                            logLoadPhase("CACHE_MISS", "No cached JS, downloading...");
+                            setEngineStatus("loading", "Downloading JS...");
+                            jsDownloadStartTime = performance.now();
+                            xhrText(m.jsUrl,
+                                (js) => { 
+                                    if (!isCurrentLoad()) return; 
+                                    logLoadPhase("JS_DOWNLOAD_OK", `${js.length} chars in ${((performance.now() - jsDownloadStartTime)/1000).toFixed(2)}s`);
+                                    if (db) writeCache(db, m.cacheKey, js); 
+                                    launch(js); 
+                                },
+                                (e)  => {
+                                    if (!isCurrentLoad()) return;
+                                    const err = `JS download failed: ${e.message || e}. URL: ${m.jsUrl}. Check: 1) Network connectivity 2) unpkg.com accessible 3) GM_xmlhttpRequest allowed`;
+                                    logLoadPhase("JS_DOWNLOAD_FAILED", err);
+                                    console.error(`[SF Engine] ${err}`);
+                                    state.engineLoadingInProgress = false;
+                                    setEngineStatus("error", err);
+                                }
+                            );
+                        }
+                    });
+                } else {
+                    logLoadPhase("CACHE_SKIPPED", "No IndexedDB, downloading JS directly...");
+                    jsDownloadStartTime = performance.now();
+                    xhrText(m.jsUrl, launch, (e) => {
+                        if (!isCurrentLoad()) return;
+                        const err = `JS download failed (no DB): ${e.message || e}. URL: ${m.jsUrl}. Check network.`;
+                        logLoadPhase("JS_DOWNLOAD_FAILED", err);
+                        console.error(`[SF Engine] ${err}`);
+                        state.engineLoadingInProgress = false;
+                        setEngineStatus("error", err);
+                    });
+                }
 
             } else {
                 // ── wasm format: cache BOTH js text and wasm bytes in IndexedDB ──
@@ -1895,21 +1926,22 @@ self.onmessage = function(e) {
                     if (!isCurrentLoad()) return;
                     try {
                         const usingModule = !!compiledModule;
-                        console.log(`[SF Engine] Building WASM-patched worker (${usingModule ? "COMPILED-MODULE mode" : "bytes mode"}: JS ${jsCode?.length || 0} chars, WASM ${wasmBytes?.length || 0} bytes)...`);
+                        logLoadPhase("WORKER_BUILD", `${usingModule ? "COMPILED-MODULE mode" : "bytes mode"}: JS ${jsCode?.length || 0} chars, WASM ${wasmBytes?.length || 0} bytes`);
                         // Cache BEFORE building — buildWasmPatchedEngine transfers
                         // wasmBytes.buffer to the worker (zero-copy), which
                         // neuters the ArrayBuffer for structured cloning.
                         if (db && wasmBytes && !fromPatchedCache) {
-                            console.log(`[SF Engine] Caching patched worker data...`);
+                            logLoadPhase("CACHE_WRITE", "Caching patched worker data...");
                             writeCacheAsync(db, patchedKey, { jsCode, wasmBytes }).catch(() => {});
                         }
                         state.localEngine = buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule);
                         state.localEngine.onerror = onEngineWorkerError;
                         state.localEngine.onmessage = handleLocalMessage;
-                        console.log(`[SF Engine] WASM worker created, finalizing...`);
+                        logLoadPhase("WORKER_BUILT", "WASM worker created, finalizing...");
 
                         finalizeEngine(modelId);
                     } catch (e) {
+                        logLoadPhase("WORKER_BUILD_FAILED", e.message);
                         console.error(`[SF Engine] Failed to build WASM worker:`, e);
                         state.engineLoadingInProgress = false;
                         setEngineStatus("error", e.message || "Build failed");
@@ -1920,43 +1952,66 @@ self.onmessage = function(e) {
                 const fetchJs = (resolve, reject) => {
                     const bundled = GM_getResourceText("stockfish.js");
                     if (bundled) {
-                        console.log(`[SF Engine] Using bundled stockfish.js resource (${bundled.length} chars)`);
+                        logLoadPhase("JS_BUNDLED", `${bundled.length} chars`);
                         resolve(bundled); return;
                     }
                     if (db) {
+                        logLoadPhase("CACHE_READ", `Reading JS cache: ${jsKey}`);
                         readCache(db, jsKey, (_, cachedJs) => {
                             if (!isCurrentLoad()) return;
                             if (cachedJs) {
-                                console.log(`[SF Engine] Found cached JS in IndexedDB (${cachedJs.length} chars)`);
+                                logLoadPhase("CACHE_HIT_JS", `Found cached JS (${cachedJs.length} chars)`);
                                 resolve(cachedJs);
                             } else {
-                                console.log(`[SF Engine] No cached JS, downloading from ${m.jsUrl}...`);
-                                xhrText(m.jsUrl, (js) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] JS downloaded (${js.length} chars), caching...`); writeCacheAsync(db, jsKey, js); resolve(js); }, reject);
+                                logLoadPhase("CACHE_MISS_JS", `Downloading from ${m.jsUrl}`);
+                                jsDownloadStartTime = performance.now();
+                                xhrText(m.jsUrl, (js) => { 
+                                    if (!isCurrentLoad()) return; 
+                                    logLoadPhase("JS_DOWNLOAD_OK", `${js.length} chars in ${((performance.now() - jsDownloadStartTime)/1000).toFixed(2)}s`);
+                                    writeCacheAsync(db, jsKey, js); 
+                                    resolve(js); 
+                                }, reject);
                             }
                         });
                     } else {
-                        console.log(`[SF Engine] No IndexedDB, downloading JS directly from ${m.jsUrl}...`);
+                        logLoadPhase("CACHE_SKIP_JS", `No IndexedDB, downloading from ${m.jsUrl}`);
+                        jsDownloadStartTime = performance.now();
                         xhrText(m.jsUrl, resolve, reject);
                     }
                 };
 
                 const fetchWasm = (resolve, reject) => {
-                    if (!m.wasmUrl) { console.log(`[SF Engine] No WASM URL for this model`); resolve(null); return; }
+                    if (!m.wasmUrl) { logLoadPhase("WASM_SKIP", "No WASM URL for this model"); resolve(null); return; }
                     if (db) {
+                        logLoadPhase("CACHE_READ", `Reading WASM cache: ${wasmKey}`);
                         readCache(db, wasmKey, (_, cachedWasm) => {
                             if (!isCurrentLoad()) return;
                             if (cachedWasm) {
-                                console.log(`[SF Engine] Found cached WASM in IndexedDB (${cachedWasm.length} bytes)`);
+                                logLoadPhase("CACHE_HIT_WASM", `Found cached WASM (${(cachedWasm.length/1024/1024).toFixed(2)} MB)`);
                                 resolve(cachedWasm);
                             } else {
-                                console.log(`[SF Engine] No cached WASM, downloading from ${m.wasmUrl}...`);
-                                xhrBinary(m.wasmUrl, (bytes) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] WASM downloaded (${bytes.length} bytes), caching...`); writeCacheAsync(db, wasmKey, bytes); resolve(bytes); },
-                                (e) => { if (!isCurrentLoad()) return; reject(new Error(`WASM download failed: ${e.message || e}. URL: ${m.wasmUrl}. Check: 1) Network 2) unpkg.com 3) ~113MB download allowed`)); });
+                                logLoadPhase("CACHE_MISS_WASM", `Downloading from ${m.wasmUrl}`);
+                                wasmDownloadStartTime = performance.now();
+                                xhrBinary(m.wasmUrl, (bytes) => { 
+                                    if (!isCurrentLoad()) return; 
+                                    logLoadPhase("WASM_DOWNLOAD_OK", `${(bytes.length/1024/1024).toFixed(2)} MB in ${((performance.now() - wasmDownloadStartTime)/1000).toFixed(2)}s`);
+                                    writeCacheAsync(db, wasmKey, bytes); 
+                                    resolve(bytes); 
+                                },
+                                (e) => { 
+                                    if (!isCurrentLoad()) return; 
+                                    logLoadPhase("WASM_DOWNLOAD_FAILED", e.message);
+                                    reject(new Error(`WASM download failed: ${e.message || e}. URL: ${m.wasmUrl}. Check: 1) Network 2) unpkg.com 3) ~113MB download allowed`)); 
+                                });
                             }
                         });
                     } else {
-                        console.log(`[SF Engine] No IndexedDB, downloading WASM directly from ${m.wasmUrl}...`);
-                        xhrBinary(m.wasmUrl, resolve, (e) => reject(new Error(`WASM download failed (no DB): ${e.message || e}. URL: ${m.wasmUrl}`)));
+                        logLoadPhase("CACHE_SKIP_WASM", `No IndexedDB, downloading from ${m.wasmUrl}`);
+                        wasmDownloadStartTime = performance.now();
+                        xhrBinary(m.wasmUrl, resolve, (e) => { 
+                            logLoadPhase("WASM_DOWNLOAD_FAILED", e.message);
+                            reject(new Error(`WASM download failed (no DB): ${e.message || e}. URL: ${m.wasmUrl}`)); 
+                        });
                     }
                 };
 
