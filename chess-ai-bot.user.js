@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.15
+// @version          11.14.16
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -2294,18 +2294,41 @@ self.onmessage = function(e) {
         }, watchdogMs + 2000);
         if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
         if (settings.showEvalBar) EvalBar.reset();
+        
+        // Smart clock-sync delay with random jitter
+        // If behind on clock -> near-zero delay to catch up
+        // If ahead -> small random human-like delay
         let delay;
-        if (settings.bulletMode) {
+        const mySec = getPlayerClockSeconds();
+        const oppSec = getOpponentClockSeconds();
+        
+        if (settings.bulletMode || mySec === null || oppSec === null) {
             delay = 0;
         } else {
-            const tmDelay = computeTimeManagedDelay();
-            if (tmDelay !== null) {
-                delay = tmDelay;
+            const diff = mySec - oppSec; // positive = we're ahead, negative = behind
+            if (diff <= -5) {
+                // Behind by 5+ seconds: play FAST to catch up (0-50ms)
+                delay = Math.random() * 50;
+            } else if (diff <= 0) {
+                // Behind by 0-5 seconds: play quick (20-120ms)
+                delay = 20 + Math.random() * 100;
+            } else if (diff <= 10) {
+                // Ahead by 0-10s: small human delay (50-300ms)
+                delay = 50 + Math.random() * 250;
+            } else if (diff <= 30) {
+                // Ahead by 10-30s: normal human delay (100-600ms)
+                delay = 100 + Math.random() * 500;
+            } else if (diff <= 60) {
+                // Ahead by 30-60s: relaxed delay (200-1000ms)
+                delay = 200 + Math.random() * 800;
             } else {
-                const minMs = settings.minDelay * 1000, maxMs = settings.maxDelay * 1000;
-                let lo = minMs, hi = maxMs;
-                if (hi <= lo) { lo = 200; hi = Math.max(hi, 600); }
-                delay = Math.random() * (hi - lo) + lo;
+                // Way ahead: longer human delay (300-1500ms)
+                delay = 300 + Math.random() * 1200;
+            }
+            // Cap at 5% of our remaining time (max 2s)
+            if (mySec > 0) {
+                const cap = Math.min(mySec * 0.05, 2) * 1000;
+                if (delay > cap) delay = cap;
             }
         }
         state.moveTargetTime = performance.now() + delay;
@@ -2328,19 +2351,27 @@ self.onmessage = function(e) {
                         const from = bookMove.substring(0, 2);
                         const to = bookMove.substring(2, 4);
                         if (board.game.getLegalMoves().some(m => m.from === from && m.to === to)) {
-                            // Book moves should have human-like delays too, not instant
-                            const tmDelay = computeTimeManagedDelay();
+                            // Book moves use same clock-sync delay with extra jitter for human feel
+                            const mySec2 = getPlayerClockSeconds();
+                            const oppSec2 = getOpponentClockSeconds();
                             let bookDelay;
-                            if (tmDelay !== null) {
-                                bookDelay = tmDelay;
+                            if (settings.bulletMode || mySec2 === null || oppSec2 === null) {
+                                bookDelay = 0;
                             } else {
-                                const minMs = settings.minDelay * 1000, maxMs = settings.maxDelay * 1000;
-                                let lo = minMs, hi = maxMs;
-                                if (hi <= lo) { lo = 200; hi = Math.max(hi, 600); }
-                                bookDelay = Math.random() * (hi - lo) + lo;
+                                const diff2 = mySec2 - oppSec2;
+                                if (diff2 <= -5) bookDelay = Math.random() * 50;
+                                else if (diff2 <= 0) bookDelay = 20 + Math.random() * 100;
+                                else if (diff2 <= 10) bookDelay = 50 + Math.random() * 250;
+                                else if (diff2 <= 30) bookDelay = 100 + Math.random() * 500;
+                                else if (diff2 <= 60) bookDelay = 200 + Math.random() * 800;
+                                else bookDelay = 300 + Math.random() * 1200;
+                                if (mySec2 > 0) {
+                                    const cap2 = Math.min(mySec2 * 0.05, 2) * 1000;
+                                    if (bookDelay > cap2) bookDelay = cap2;
+                                }
                             }
-                            // Add extra randomness (±50-150ms) to book moves for more human feel
-                            bookDelay += getRandomInt(50, 150);
+                            // Extra jitter (±30-100ms) for book moves
+                            bookDelay += getRandomInt(30, 100);
                             state.moveTargetTime = performance.now() + bookDelay;
                             updateUI();
                             state.pendingAnalysis = setTimeout(() => {
