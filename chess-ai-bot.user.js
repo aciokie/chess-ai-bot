@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.20
+// @version          11.14.21
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -2356,7 +2356,10 @@ self.onmessage = function(e) {
         const mySec = getPlayerClockSeconds();
         const oppSec = getOpponentClockSeconds();
         
-        if (settings.bulletMode || mySec === null || oppSec === null) {
+        if (settings.bulletMode) {
+            // Bullet: tiny random jitter (0-50ms) to avoid perfect 0ms pattern
+            delay = Math.random() * 50;
+        } else if (mySec === null || oppSec === null) {
             delay = 0;
         } else {
             const diff = mySec - oppSec; // positive = we're ahead, negative = behind
@@ -2385,8 +2388,10 @@ self.onmessage = function(e) {
                 if (delay > cap) delay = cap;
             }
         }
-        // Apply human-like variance (log-normal distribution)
-        delay = getHumanLikeDelay(delay);
+        // Apply human-like variance (log-normal distribution) — skip for bullet
+        if (!settings.bulletMode) {
+            delay = getHumanLikeDelay(delay);
+        }
         state.moveTargetTime = performance.now() + delay;
         updateUI();
 
@@ -2411,7 +2416,10 @@ self.onmessage = function(e) {
                             const mySec2 = getPlayerClockSeconds();
                             const oppSec2 = getOpponentClockSeconds();
                             let bookDelay;
-                            if (settings.bulletMode || mySec2 === null || oppSec2 === null) {
+                            if (settings.bulletMode) {
+                                // Bullet: tiny random jitter (0-50ms) + extra book jitter
+                                bookDelay = Math.random() * 50 + getRandomInt(30, 100);
+                            } else if (mySec2 === null || oppSec2 === null) {
                                 bookDelay = 0;
                             } else {
                                 const diff2 = mySec2 - oppSec2;
