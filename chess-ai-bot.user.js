@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.38
+// @version          11.14.39
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -12628,12 +12628,10 @@ self.onmessage = function(e) {
         const goCmd = `go depth ${actualDepth}`;
         console.log(`[SF Engine] → ${goCmd}`);
         state.currentSearchFEN = fen;
-        if (wasThinking) {
-            // Only send stop if there was an ongoing search
-            state.localEngine.postMessage("stop");
-            state.pendingAbortEchoes = (state.pendingAbortEchoes || 0) + 1;
-        }
-        // UCI protocol: ucinewgame resets engine, then wait for readyok before position+go
+        // Always stop any ongoing search before ucinewgame (harmless if idle)
+        // This fixes the hang when book moves interrupt a running search
+        state.localEngine.postMessage("stop");
+        state.pendingAbortEchoes = (state.pendingAbortEchoes || 0) + 1;
         state.localEngine.postMessage("ucinewgame");
         state.localEngine.postMessage("isready");
         // Defer position+go until readyok received (handled in handleLocalMessage)
