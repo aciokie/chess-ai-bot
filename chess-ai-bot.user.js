@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.36
+// @version          11.14.37
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -12294,19 +12294,41 @@ self.onmessage = function(e) {
     }
 
     function triggerFallback() {
-        if (settings.engineMode === 'local') return;
-        console.warn(`API Error. Switching to Local SF18 at Depth ${settings.depth}.`);
-        state.isThinking = false;
-        settings.engineMode = 'local';
-        saveSetting('engineMode', 'local');
-        if (state.ui.selMode) state.ui.selMode.value = 'local';
-        state.lastMoveResult = `⚠️ API Error. Switched to Local SF18.`;
-        loadLocalEngine();
-        if (state.lastSanitizedBoardFEN) analyzeLocal(state.lastSanitizedBoardFEN, settings.depth, state.isThinking);
+        // Cloud -> Local fallback (original behavior)
+        if (settings.engineMode !== 'local') {
+            console.warn(`API Error. Switching to Local SF18 at Depth ${settings.depth}.`);
+            state.isThinking = false;
+            settings.engineMode = 'local';
+            saveSetting('engineMode', 'local');
+            if (state.ui.selMode) state.ui.selMode.value = 'local';
+            state.lastMoveResult = `⚠️ API Error. Switched to Local SF18.`;
+            loadLocalEngine();
+            if (state.lastSanitizedBoardFEN) analyzeLocal(state.lastSanitizedBoardFEN, settings.depth, state.isThinking);
+            updateUI();
+            return;
+        }
+        
+        // Local -> Cloud fallback (if local fails)
+        console.warn(`Local engine failed. Switching to Cloud SF18.`);
+        if (state.localEngine) {
+            try { state.localEngine.terminate(); } catch (_) {}
+            state.localEngine = null;
+        }
+        if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
+        state.pendingReadyProbe = false;
+        state.engineStatus = "not_installed";
+        state.engineLoadingInProgress = false;
+        
+        settings.engineMode = "cloud";
+        saveSetting("engineMode", "cloud");
+        if (state.ui.selMode) state.ui.selMode.value = "cloud";
+        if (state.lastSanitizedBoardFEN) {
+            setTimeout(() => analyze(settings.depth), 100);
+        }
         updateUI();
     }
     function computeSmartDepth(userDepth) {
-        let d = settings.depth;
+        let d = userDepth;
         // Anti-draw: boost depth when approaching 50-move / 75-move rule
         // to find forcing moves (captures/pawn pushes) that reset the clock
         const fen = state.lastSentFEN;
@@ -12875,7 +12897,7 @@ self.onmessage = function(e) {
         // If we're winning but eval=0 or opponent has no legal moves after our best,
         // the position may be stalemate or heading toward it. Force re-analysis with
         // a different move if possible (use second-best PV line).
-        if (fen && settings.localMode !== "off") {
+        if (fen && settings.engineMode !== "off") {
             const hmc = AntiDraw.getHalfmoveClock(fen);
             const board = fen.split(" ")[0];
 
@@ -13189,6 +13211,16 @@ const wait = settings.bulletMode
         // If local engine failed and we're not already in cloud mode, fallback to cloud
         if (settings.engineMode === "local" && state.engineStatus === "error") {
             console.warn(`[SF Engine] Local engine error, falling back to cloud...`);
+            // Terminate local engine to avoid conflicts
+            if (state.localEngine) {
+                try { state.localEngine.terminate(); } catch (_) {}
+                state.localEngine = null;
+            }
+            if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
+            state.pendingReadyProbe = false;
+            state.engineStatus = "not_installed";
+            state.engineLoadingInProgress = false;
+            
             settings.engineMode = "cloud";
             saveSetting("engineMode", "cloud");
             if (state.ui.selMode) state.ui.selMode.value = "cloud";
@@ -15064,6 +15096,8 @@ pvSettings: document.getElementById("pvSettings"),
         state.lastSanitizedBoardFEN = "";
         state.currentSearchFEN = "";
         state.lastMoveResult = "N/A";
+        state.analysisPauseUntil = 0;
+        state.lastAnalysisCount = 0;
         if (state.pendingAnalysis) { clearTimeout(state.pendingAnalysis); state.pendingAnalysis = null; }
         if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
         if (state.rematchTimeout) { clearTimeout(state.rematchTimeout); state.rematchTimeout = null; }
