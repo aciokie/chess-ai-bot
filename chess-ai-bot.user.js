@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.35
+// @version          11.14.36
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -13185,6 +13185,18 @@ const wait = settings.bulletMode
         console.error(`[SF Engine] State at error: engineStatus=${state.engineStatus}, isThinking=${state.isThinking}, hasEngine=${!!state.localEngine}`);
         state.lastResponse = `${type}: ${err?.message || err}`;
         state.lastMoveResult = `❌ ${type}`;
+        
+        // If local engine failed and we're not already in cloud mode, fallback to cloud
+        if (settings.engineMode === "local" && state.engineStatus === "error") {
+            console.warn(`[SF Engine] Local engine error, falling back to cloud...`);
+            settings.engineMode = "cloud";
+            saveSetting("engineMode", "cloud");
+            if (state.ui.selMode) state.ui.selMode.value = "cloud";
+            if (state.lastSanitizedBoardFEN) {
+                setTimeout(() => analyze(settings.depth), 100);
+            }
+        }
+        
         updateUI();
     }
 
@@ -15049,6 +15061,7 @@ pvSettings: document.getElementById("pvSettings"),
         state.localPV = null;
         state.localDepth = null;
         state.lastSentFEN = "";
+        state.lastSanitizedBoardFEN = "";
         state.currentSearchFEN = "";
         state.lastMoveResult = "N/A";
         if (state.pendingAnalysis) { clearTimeout(state.pendingAnalysis); state.pendingAnalysis = null; }
@@ -15143,11 +15156,11 @@ pvSettings: document.getElementById("pvSettings"),
         updateUI();
     }
 
-    function scheduleBackupPoll() {
+function scheduleBackupPoll() {
         // Adaptive polling: fast when our turn, slow when opponent's turn
         const isMyTurn = isOurTurnNow();
-        const delay = isMyTurn 
-            ? getRandomInt(50, 100)           // 50-100ms when our turn
+        const delay = isMyTurn
+            ? getRandomInt(100, 200)           // 100-200ms when our turn (was 50-100)
             : getRandomInt(200, 500);         // 200-500ms when opponent's turn
         setTimeout(() => {
             try { checkAndAnalyze(); }
@@ -15310,24 +15323,12 @@ pvSettings: document.getElementById("pvSettings"),
     // Initial check after 10 seconds
     setTimeout(checkForUpdate, 10000);
 
-    // LAZY LOAD: Don't preload engine. Load only when user switches to Local mode.
-    // setTimeout(loadLocalEngine, 2000);  // DISABLED
-
-    // Start event-driven polling instead of fixed 50ms interval
+    // Start event-driven polling
     setupBoardObserver();
     scheduleBackupPoll();
     startGameOverPoll();
-    // AntiDraw now works purely via engine UCI options and processBestMove()
-    // No MutationObserver needed
-    if (typeof GM_xmlhttpRequest === "function") {
-        let ver = "";
-        try { if (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) ver = String(GM_info.script.version); } catch (e) {}
-        if (ver && GM_getValue("bot_instTracker", "") !== ver) {
-            GM_xmlhttpRequest({ method: "GET", url: TRACK_URL, timeout: 10000 });
-        }
-    }
-
-    // Initial check
+    // AntiDraw works via engine UCI options and processBestMove()
+    // Initial board check
     checkAndAnalyze();
 
     // ALWAYS preload local engine in background for instant deployment when switching modes
