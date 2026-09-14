@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.33
+// @version          11.14.34
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -12359,6 +12359,7 @@ self.onmessage = function(e) {
             if (state.isThinking && performance.now() - state.analysisStartTime > watchdogMs) {
                 console.warn(`[SF Engine] analysis watchdog: no result within ${Math.round(watchdogMs / 1000)}s — forcing retry`);
                 state.isThinking = false;
+                state.pendingMoveDelay = 0;
                 state.pendingLocalFEN = null;
                 state.pendingLocalDepth = null;
                 state.lastSanitizedBoardFEN = "";
@@ -13076,8 +13077,10 @@ self.onmessage = function(e) {
     };
 
 function triggerAutoMove(fen = null) {
-if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] triggerAutoMove aborted: no bestMove or no board`); return; }
-      const tn = state.board.game.getTurn();
+  if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] triggerAutoMove aborted: no bestMove or no board`); return; }
+  // Don't execute if we're still thinking (new analysis in progress)
+  if (state.isThinking) { console.warn(`[SF Engine] triggerAutoMove aborted: analysis still in progress`); return; }
+  const tn = state.board.game.getTurn();
       const pa = state.board.game.getPlayingAs();
       const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
       const paNum = (pa === 1 || pa === "w" || pa === "white") ? 1 : 2;
