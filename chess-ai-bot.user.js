@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.27
+// @version          11.14.28
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -11638,50 +11638,8 @@ self.onmessage = function(e) {
         updateUI();
         updateLocalSettingsUI();
 
-        // Heartbeat instead of a fixed kill-timeout: the 112MB wasm can take a
-        // long time to compile+init (original code had NO timeout and just
-        // waited). Every 15s while loading we send "isready"; a "readyok"
-        // reply means the engine is alive and we keep waiting forever. Only
-        // TWO consecutive missed heartbeats (dead worker) terminate it.
-        // readyok also acknowledges the initial isready sent above.
-        state.pendingReadyProbe = true;
-        state.heartbeatMisses = 0;
-        const stopHeartbeat = () => {
-            if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
-            state.pendingReadyProbe = false;
-        };
-        state.engineHeartbeatTimer = setInterval(() => {
-            if (!state.localEngine || state.engineStatus !== "loading") { stopHeartbeat(); return; }
-            // Worker-side probes (3s alive beacon) reset the miss counter —
-            // beacons prove the event loop is free; their absence means the
-            // script is blocked (dead or mid-compile). A blocked-but-alive
-            // worker gets 6 misses (90s) before we declare it dead.
-            if (state.lastWorkerProbeAt && performance.now() - state.lastWorkerProbeAt < 3500) {
-                state.heartbeatMisses = 0;
-                return;
-            }
-            if (state.pendingReadyProbe) {
-                state.heartbeatMisses++;
-                const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
-                console.warn(`[SF Engine] heartbeat miss ${state.heartbeatMisses}/6 at ${elapsed}s — worker unresponsive`);
-                if (state.heartbeatMisses >= 6) {
-                    stopHeartbeat();
-                    const errMsg = `Engine worker unresponsive (${elapsed}s, 2 missed heartbeats). Model: ${m.label} (${modelId}). Check: 1) blob wasm URL fetch working? 2) CSP blocking worker? 3) JS parse error in worker?`;
-                    console.error(`[SF Engine] ${errMsg}`);
-                    try { state.localEngine.terminate(); } catch (e) { console.error(`[SF Engine] Error terminating worker:`, e); }
-                    state.localEngine = null;
-                    setEngineStatus("error", errMsg);
-                    updateUI();
-                    return;
-                }
-            } else {
-                state.heartbeatMisses = 0;
-                const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
-                console.log(`[SF Engine] engine alive at ${elapsed}s, still initializing — waiting`);
-            }
-            try { state.localEngine.postMessage("isready"); } catch (e) { console.error(`[SF Engine] heartbeat postMessage failed:`, e); }
-            state.pendingReadyProbe = true;
-        }, 15000);
+        // NOTE: Heartbeat is now started in handleLocalMessage when uciok is received
+        // This avoids killing the worker during WASM compilation (30-60s) when it can't send beacon probes
     }
 
     function onEngineWorkerError(e) {
@@ -12727,6 +12685,47 @@ self.onmessage = function(e) {
                 state.isThinking = !1;
                 analyzeLocal(fFEN, fDepth, true);
             }
+
+            // Start heartbeat NOW that engine is fully initialized (after uciok)
+            // This avoids killing worker during WASM compilation (30-60s)
+            state.pendingReadyProbe = true;
+            state.heartbeatMisses = 0;
+            const stopHeartbeat = () => {
+                if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
+                state.pendingReadyProbe = false;
+            };
+            state.engineHeartbeatTimer = setInterval(() => {
+                if (!state.localEngine || state.engineStatus !== "ready") { stopHeartbeat(); return; }
+                // Worker-side probes (3s alive beacon) reset the miss counter —
+                // beacons prove the event loop is free; their absence means the
+                // script is blocked (dead or mid-compile). A blocked-but-alive
+                // worker gets 6 misses (90s) before we declare it dead.
+                if (state.lastWorkerProbeAt && performance.now() - state.lastWorkerProbeAt < 3500) {
+                    state.heartbeatMisses = 0;
+                    return;
+                }
+                if (state.pendingReadyProbe) {
+                    state.heartbeatMisses++;
+                    const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
+                    console.warn(`[SF Engine] heartbeat miss ${state.heartbeatMisses}/6 at ${elapsed}s — worker unresponsive`);
+                    if (state.heartbeatMisses >= 6) {
+                        stopHeartbeat();
+                        const errMsg = `Engine worker unresponsive (${elapsed}s, 2 missed heartbeats). Model: ${getEngineById(settings.localModelId || "sf18_05").label} (${settings.localModelId || "sf18_05"}). Check: 1) blob wasm URL fetch working? 2) CSP blocking worker? 3) JS parse error in worker?`;
+                        console.error(`[SF Engine] ${errMsg}`);
+                        try { state.localEngine.terminate(); } catch (e) { console.error(`[SF Engine] Error terminating worker:`, e); }
+                        state.localEngine = null;
+                        setEngineStatus("error", errMsg);
+                        updateUI();
+                        return;
+                    }
+                } else {
+                    state.heartbeatMisses = 0;
+                    const elapsed = Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000);
+                    console.log(`[SF Engine] engine alive at ${elapsed}s — waiting`);
+                }
+                try { state.localEngine.postMessage("isready"); } catch (e) { console.error(`[SF Engine] heartbeat postMessage failed:`, e); }
+                state.pendingReadyProbe = true;
+            }, 15000);
             return;
         }
         if (msg === "readyok") {
