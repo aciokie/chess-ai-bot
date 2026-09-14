@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.37
+// @version          11.14.38
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -329,6 +329,8 @@ const LOCAL_ENGINES = [
         pendingAnalysis: null,
         pendingLocalFEN: null,
         pendingLocalDepth: null,
+        pendingPositionFEN: null,
+        pendingGoCmd: null,
         pendingAutoMoveTimeout: null,
         heartbeatMisses: 0,
         lastWorkerProbeAt: 0,
@@ -12626,14 +12628,17 @@ self.onmessage = function(e) {
         const goCmd = `go depth ${actualDepth}`;
         console.log(`[SF Engine] → ${goCmd}`);
         state.currentSearchFEN = fen;
-        state.localEngine.postMessage("stop");
+        if (wasThinking) {
+            // Only send stop if there was an ongoing search
+            state.localEngine.postMessage("stop");
+            state.pendingAbortEchoes = (state.pendingAbortEchoes || 0) + 1;
+        }
+        // UCI protocol: ucinewgame resets engine, then wait for readyok before position+go
         state.localEngine.postMessage("ucinewgame");
-        state.localEngine.postMessage(`position fen ${fen}`);
-        state.localEngine.postMessage(goCmd);
-        // A dispatch that interrupts a running search makes the old search's
-        // bestmove an abort-echo: it was computed for a FEN we've abandoned.
-        // Count it so the bestmove handler drops that stale result.
-        if (wasThinking) state.pendingAbortEchoes = (state.pendingAbortEchoes || 0) + 1;
+        state.localEngine.postMessage("isready");
+        // Defer position+go until readyok received (handled in handleLocalMessage)
+        state.pendingPositionFEN = fen;
+        state.pendingGoCmd = goCmd;
         state.lastPayload = `Worker CMDs:\nsetoption name MultiPV value ${wantMultiPV}\nposition fen ${fen}\ngo depth ${actualDepth}`;
         state.ui.liveOutput.textContent = "⚡ Local SF18 Analysis...";
         updateUI();
@@ -12769,6 +12774,16 @@ self.onmessage = function(e) {
                 setEngineStatus("ready", "");
                 state.lastMoveResult = `✅ ${m.label} ready.`;
                 updateUI();
+            }
+            // Send pending position+go commands (from analyzeLocal's ucinewgame flow)
+            if (state.pendingPositionFEN && state.pendingGoCmd && state.localEngine) {
+                console.log(`[SF Engine] → position fen ${state.pendingPositionFEN}`);
+                console.log(`[SF Engine] → ${state.pendingGoCmd}`);
+                state.currentSearchFEN = state.pendingPositionFEN;
+                state.localEngine.postMessage(`position fen ${state.pendingPositionFEN}`);
+                state.localEngine.postMessage(state.pendingGoCmd);
+                state.pendingPositionFEN = null;
+                state.pendingGoCmd = null;
             }
             if (state.pendingLocalFEN && state.localEngine) {
                 console.log(`[SF Engine] Processing pending FEN after readyok`);
@@ -13201,6 +13216,8 @@ const wait = settings.bulletMode
         state.pendingMoveDelay = 0;
         state.pendingLocalFEN = null;
         state.pendingLocalDepth = null;
+        state.pendingPositionFEN = null;
+        state.pendingGoCmd = null;
         state.pendingAbortEchoes = 0;
         console.error(`[SF Engine] ${type}:`, err);
         console.error(`[SF Engine] Error stack:`, err?.stack);
@@ -15081,6 +15098,8 @@ pvSettings: document.getElementById("pvSettings"),
         state.pendingMoveDelay = 0;
         state.pendingLocalFEN = null;
         state.pendingLocalDepth = null;
+        state.pendingPositionFEN = null;
+        state.pendingGoCmd = null;
         if (state.analysisWatchdog) { clearTimeout(state.analysisWatchdog); state.analysisWatchdog = null; }
         state.currentBestMove = null;
         state.currentPV = [];
