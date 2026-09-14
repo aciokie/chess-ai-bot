@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.30
+// @version          11.14.31
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -11563,6 +11563,7 @@ WebAssembly.instantiate = function(bufferOrModule, imports) {
     });
 };
 self.postMessage("__probe:bootstrap-ready");
+setInterval(function() { self.postMessage("__probe:beacon"); }, 3000);
 var _logFetch = function(u) { if (_probeCount++ < 20) self.postMessage("__probe:fetch " + String(u)); };
 self.fetch = function(url, opts) {
     _logFetch(url);
@@ -12698,6 +12699,12 @@ self.onmessage = function(e) {
             };
             state.engineHeartbeatTimer = setInterval(() => {
                 if (!state.localEngine || state.engineStatus !== "ready") { stopHeartbeat(); return; }
+                // If engine is thinking, don't send isready and don't count misses
+                // The search will complete and send bestmove, which proves liveness
+                if (state.isThinking) {
+                    state.heartbeatMisses = 0;
+                    return;
+                }
                 // Worker-side probes (3s alive beacon) reset the miss counter —
                 // beacons prove the event loop is free; their absence means the
                 // script is blocked (dead or mid-compile). A blocked-but-alive
