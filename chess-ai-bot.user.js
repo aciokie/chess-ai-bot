@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.22
+// @version          11.14.23
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1676,6 +1676,11 @@ self.onmessage = function(e) {
         state.localEngine = null;
         state.engineLoadingInProgress = false;
         state.engineRetryAt = Date.now() + 15000;
+        state.isThinking = false;
+        state.pendingLocalFEN = null;
+        state.pendingLocalDepth = null;
+        state.pendingMoveDelay = 0;
+        state.pendingAbortEchoes = 0;
         
         // Auto-restart engine after crash (especially after mate sequence)
         setTimeout(() => {
@@ -2664,7 +2669,7 @@ self.onmessage = function(e) {
                 const fFEN = state.pendingLocalFEN, fDepth = state.pendingLocalDepth;
                 state.pendingLocalFEN = null; state.pendingLocalDepth = null;
                 state.isThinking = !1;
-                analyzeLocal(fFEN, fDepth);
+                analyzeLocal(fFEN, fDepth, true);
             }
             return;
         }
@@ -2682,7 +2687,7 @@ self.onmessage = function(e) {
                 const fFEN = state.pendingLocalFEN, fDepth = state.pendingLocalDepth;
                 state.pendingLocalFEN = null; state.pendingLocalDepth = null;
                 state.isThinking = !1;
-                analyzeLocal(fFEN, fDepth);
+                analyzeLocal(fFEN, fDepth, true);
             }
             return;
         }
@@ -4957,6 +4962,9 @@ pvSettings: document.getElementById("pvSettings"),
     function resetTransientStateForNewGame() {
         if (state.isThinking) state.pendingAbortEchoes = (state.pendingAbortEchoes || 0) + 1;
         state.isThinking = false;
+        state.pendingMoveDelay = 0;
+        state.pendingLocalFEN = null;
+        state.pendingLocalDepth = null;
         if (state.analysisWatchdog) { clearTimeout(state.analysisWatchdog); state.analysisWatchdog = null; }
         state.currentBestMove = null;
         state.currentPV = [];
