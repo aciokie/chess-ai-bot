@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.21
+// @version          11.14.22
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -2393,6 +2393,7 @@ self.onmessage = function(e) {
             delay = getHumanLikeDelay(delay);
         }
         state.moveTargetTime = performance.now() + delay;
+        state.pendingMoveDelay = delay; // Store for triggerAutoMove
         updateUI();
 
         // ─── Opening Book shortcut ── instant move if we know the position AND we
@@ -3032,14 +3033,15 @@ if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] tr
          return;
      }
 
-     // Forced winning mate: play the mating move instantly (pre-move-style) and
-     // never let the humanizer deviate off the forced win. Each mating move is
-     // re-confirmed on our turn, so the full mate plays out across turns even if
-     // the opponent deviates within their (still losing) legal replies.
-const mateNorm = state.currentMateNorm;
+// Forced winning mate: play the mating move instantly (pre-move-style) and
+      // never let the humanizer deviate off the forced win. Each mating move is
+      // re-confirmed on our turn, so the full mate plays out across turns even if
+      // the opponent deviates within their (still losing) legal replies.
+ const mateNorm = state.currentMateNorm;
        if (mateNorm !== null && mateNorm > 0) {
            console.log(`[SF Engine] Mate in ${mateNorm}, playing best move immediately`);
-           scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), 0);
+           const mateWait = settings.bulletMode ? (state.pendingMoveDelay || 0) : 0;
+           scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), mateWait);
            return;
        }
 
@@ -3053,7 +3055,7 @@ const mateNorm = state.currentMateNorm;
               const idx = Math.random() < 0.6 ? 1 : 2;
               if (alts[idx] && alts[idx].move) {
                   console.log(`[SF Engine] Stealth: playing suboptimal ${alts[idx].move} (winPct=${getMoveWinPct(alts[idx].evalRaw, alts[idx].mate)})`);
-                  const wait = Math.max(0, state.moveTargetTime - performance.now());
+                  const wait = settings.bulletMode ? (state.pendingMoveDelay || 0) : Math.max(0, state.moveTargetTime - performance.now());
                   scheduleAutoMove(() => playMove(alts[idx].move, analyzedFEN), wait);
                   return;
               }
@@ -3083,19 +3085,21 @@ const mateNorm = state.currentMateNorm;
                      r -= w[k];
                      if (r <= 0) { chosen = safe[k]; break; }
                  }
-                 if (chosen && chosen.move) {
-                     console.log(`[SF Engine] Humanizer chose alternative: ${chosen.move} (winPct=${getMoveWinPct(chosen.evalRaw, chosen.mate)})`);
-                     const wait = Math.max(0, state.moveTargetTime - performance.now());
-                     scheduleAutoMove(() => playMove(chosen.move, analyzedFEN), wait);
-                     return;
-                 }
+if (chosen && chosen.move) {
+                      console.log(`[SF Engine] Humanizer chose alternative: ${chosen.move} (winPct=${getMoveWinPct(chosen.evalRaw, chosen.mate)})`);
+                      const wait = settings.bulletMode ? (state.pendingMoveDelay || 0) : Math.max(0, state.moveTargetTime - performance.now());
+                      scheduleAutoMove(() => playMove(chosen.move, analyzedFEN), wait);
+                      return;
+                  }
              }
          }
      }
 
-     const wait = Math.max(0, state.moveTargetTime - performance.now());
-     console.log(`[SF Engine] Playing best move: ${state.currentBestMove} after ${wait}ms`);
-     scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), wait);
+const wait = settings.bulletMode 
+          ? (state.pendingMoveDelay || 0) 
+          : Math.max(0, state.moveTargetTime - performance.now());
+      console.log(`[SF Engine] Playing best move: ${state.currentBestMove} after ${wait}ms`);
+      scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), wait);
  }
     function handleError(type, err) {
         state.isThinking = !1;
