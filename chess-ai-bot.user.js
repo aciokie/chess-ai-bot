@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.16
+// @version          11.14.17
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -2374,6 +2374,8 @@ self.onmessage = function(e) {
                             bookDelay += getRandomInt(30, 100);
                             state.moveTargetTime = performance.now() + bookDelay;
                             updateUI();
+                            // CRITICAL: Clear isThinking NOW so opponent's reply doesn't get blocked
+                            state.isThinking = false;
                             state.pendingAnalysis = setTimeout(() => {
                                 state.pendingAnalysis = null;
                                 try {
@@ -2382,7 +2384,6 @@ self.onmessage = function(e) {
                                 } catch (e) {
                                     console.error(`[SF Engine] book-move tick failed:`, e);
                                 }
-                                state.isThinking = false;
                             }, bookDelay);
                             return;
                         }
