@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.18
+// @version          11.14.20
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -394,6 +394,7 @@ const LOCAL_ENGINES = [
         localMinThinkTime: 20,
         localSlowMover: 100,
         localContempt: 24,
+        localThreads: 1,
         // ─── New feature settings ──
         threatDetection: true,
         openingBookEnabled: true,
@@ -495,6 +496,55 @@ const LOCAL_ENGINES = [
     // --- UTILITIES ---
     const getRandomInt = (min, max) => { if (min > max) [min, max] = [max, min]; return Math.floor(Math.random() * (max - min + 1)) + min; };
     const log = (...args) => { if (settings?.debugLogs) console.log(...args); };
+
+    // Human-like thinking time: log-normal distribution (matches human reaction times)
+    // mean ~ log(300ms), sigma ~ 0.5 gives realistic spread
+    function getHumanLikeDelay(baseDelay) {
+        if (baseDelay <= 0) return 0;
+        // Log-normal: exp(mean + sigma * N(0,1))
+        const mean = Math.log(Math.max(baseDelay, 50)) - 0.125; // -sigma^2/2 for unbiased
+        const sigma = 0.45;
+        const u1 = Math.random(), u2 = Math.random();
+        const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2); // Box-Muller
+        let delay = Math.exp(mean + sigma * z);
+        // Clamp to reasonable range: 0.3x to 3x base
+        delay = Math.max(baseDelay * 0.3, Math.min(baseDelay * 3, delay));
+        return Math.round(delay);
+    }
+
+    // Occasional "mistake" when winning big: play 2nd/3rd best move
+    function shouldPlaySuboptimalMove(evalCp, mate) {
+        if (!settings.humanizer || settings.engineMode !== 'local') return false;
+        if (mate !== null && mate > 0) return false; // Never blunder mate
+        const winPct = getMoveWinPct(evalCp, mate);
+        // When winning >70%, 8% chance to play suboptimal
+        if (winPct > 70 && Math.random() < 0.08) return true;
+        // When winning >90%, 15% chance
+        if (winPct > 90 && Math.random() < 0.15) return true;
+        return false;
+    }
+
+    // Vary opening book: sometimes pick alternative moves
+    function getVariedBookMove(fen) {
+        const bookMove = OpeningBook.lookup(fen);
+        if (!bookMove || !settings.humanizer) return bookMove;
+        // 15% chance to pick a different legal move instead of book
+        if (Math.random() < 0.15) {
+            const board = state.board;
+            if (board?.game?.getLegalMoves) {
+                const legal = board.game.getLegalMoves();
+                if (legal.length > 1) {
+                    const nonBook = legal.filter(m => `${m.from}${m.to}` !== bookMove);
+                    if (nonBook.length > 0) {
+                        const alt = nonBook[Math.floor(Math.random() * nonBook.length)];
+                        console.log(`[SF Engine] Book variance: ${bookMove} -> ${alt.from}${alt.to}`);
+                        return `${alt.from}${alt.to}`;
+                    }
+                }
+            }
+        }
+        return bookMove;
+    }
 
     // Anti-cheat: occasionally delay analysis start by a short random amount (subtle, not annoying)
     // Returns true when analysis should be skipped this tick (short pause active).
@@ -1392,6 +1442,10 @@ const getMoveWinPct = (cp, mate) => {
             cmds.push(`setoption name UCI_Elo value ${settings.localElo}`);
         }
         if (m.hasContempt) cmds.push(`setoption name Contempt value ${settings.localContempt}`);
+        // Threads (SF14+ supports it). Default 1 = single-threaded.
+        if (settings.localThreads && settings.localThreads > 1) {
+            cmds.push(`setoption name Threads value ${settings.localThreads}`);
+        }
         cmds.push("setoption name MultiPV value 1");
         // Anti-draw (always-on, cannot be turned off):
         // Force Contempt=100 to strongly prefer winning over drawing (SF9-15 only).
@@ -2331,6 +2385,8 @@ self.onmessage = function(e) {
                 if (delay > cap) delay = cap;
             }
         }
+        // Apply human-like variance (log-normal distribution)
+        delay = getHumanLikeDelay(delay);
         state.moveTargetTime = performance.now() + delay;
         updateUI();
 
@@ -2339,7 +2395,7 @@ self.onmessage = function(e) {
         // strength), skip the book and let the engine return its best move — otherwise
         // the bot would play a depth-0 book move instead of the full-depth answer.
         if (OpeningBook.enabled && !fenOverride && settings.autoMove && depth <= 12) {
-            const bookMove = OpeningBook.lookup(finalFEN);
+            const bookMove = getVariedBookMove(finalFEN);
             if (bookMove) {
                 const board = state.board;
                 if (board?.game?.getTurn && board?.game?.getPlayingAs) {
@@ -2972,14 +3028,31 @@ if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] tr
      // never let the humanizer deviate off the forced win. Each mating move is
      // re-confirmed on our turn, so the full mate plays out across turns even if
      // the opponent deviates within their (still losing) legal replies.
-      const mateNorm = state.currentMateNorm;
-      if (mateNorm !== null && mateNorm > 0) {
-          console.log(`[SF Engine] Mate in ${mateNorm}, playing best move immediately`);
-          scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), 0);
-          return;
+const mateNorm = state.currentMateNorm;
+       if (mateNorm !== null && mateNorm > 0) {
+           console.log(`[SF Engine] Mate in ${mateNorm}, playing best move immediately`);
+           scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), 0);
+           return;
+       }
+
+      // Occasional suboptimal move when winning big (stealth)
+      const evalForMistake = state.localEval !== null ? parseFloat(state.localEval) : null;
+      const mateForMistake = state.localMate;
+      if (shouldPlaySuboptimalMove(evalForMistake, mateForMistake)) {
+          const alts = state.humanAlternatives || [];
+          if (alts.length >= 2) {
+              // Pick 2nd or 3rd best move
+              const idx = Math.random() < 0.6 ? 1 : 2;
+              if (alts[idx] && alts[idx].move) {
+                  console.log(`[SF Engine] Stealth: playing suboptimal ${alts[idx].move} (winPct=${getMoveWinPct(alts[idx].evalRaw, alts[idx].mate)})`);
+                  const wait = Math.max(0, state.moveTargetTime - performance.now());
+                  scheduleAutoMove(() => playMove(alts[idx].move, analyzedFEN), wait);
+                  return;
+              }
+          }
       }
 
- if (!shouldPlayBestMove()) {
+  if (!shouldPlayBestMove()) {
          const alts = state.humanAlternatives || [];
          console.log(`[SF Engine] Humanizer active, alternatives=${alts.length}`);
          if (alts.length >= 2) {
@@ -3040,16 +3113,57 @@ if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] tr
         const r = el.getBoundingClientRect();
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     }
-    function simulateMouseClick(target, x, y) {
-        if (!target) return;
-        const opts = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0, buttons: 1 };
-        target.dispatchEvent(new PointerEvent("pointerdown", { ...opts, pointerId: 1, pointerType: "mouse", isPrimary: true }));
-        target.dispatchEvent(new MouseEvent("mousedown", opts));
-        const upOpts = { ...opts, buttons: 0 };
-        target.dispatchEvent(new PointerEvent("pointerup", { ...upOpts, pointerId: 1, pointerType: "mouse", isPrimary: true }));
-        target.dispatchEvent(new MouseEvent("mouseup", upOpts));
-        target.dispatchEvent(new MouseEvent("click", upOpts));
+
+    // Human-like curved mouse movement using Bézier curve
+    function simulateHumanMouseMove(fromEl, toEl, fromPos, toPos, callback) {
+        if (!fromEl || !toEl) { callback(); return; }
+        
+        const steps = 15 + Math.floor(Math.random() * 10); // 15-25 steps
+        const controlX = fromPos.x + (toPos.x - fromPos.x) * (0.3 + Math.random() * 0.4);
+        const controlY = fromPos.y + (toPos.y - fromPos.y) * (0.3 + Math.random() * 0.4) + (Math.random() - 0.5) * 80; // curve up/down
+        const startTime = performance.now();
+        const duration = 120 + Math.random() * 180; // 120-300ms movement
+        
+        function animate(time) {
+            const elapsed = time - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            // Ease in-out
+            const eased = progress < 0.5 
+                ? 2 * progress * progress 
+                : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+            
+            // Quadratic Bézier curve
+            const x = (1 - eased) * (1 - eased) * fromPos.x + 2 * (1 - eased) * eased * controlX + eased * eased * toPos.x;
+            const y = (1 - eased) * (1 - eased) * fromPos.y + 2 * (1 - eased) * eased * controlY + eased * eased * toPos.y;
+            
+            // Dispatch mousemove events along the path
+            const moveOpts = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, buttons: 1 };
+            fromEl.dispatchEvent(new MouseEvent("mousemove", moveOpts));
+            document.dispatchEvent(new MouseEvent("mousemove", moveOpts));
+            
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            } else {
+                // Final position - click on destination
+                const clickOpts = { bubbles: true, cancelable: true, composed: true, clientX: toPos.x, clientY: toPos.y, button: 0, buttons: 1 };
+                toEl.dispatchEvent(new PointerEvent("pointerdown", { ...clickOpts, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+                toEl.dispatchEvent(new MouseEvent("mousedown", clickOpts));
+                const upOpts = { ...clickOpts, buttons: 0 };
+                toEl.dispatchEvent(new PointerEvent("pointerup", { ...upOpts, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+                toEl.dispatchEvent(new MouseEvent("mouseup", upOpts));
+                toEl.dispatchEvent(new MouseEvent("click", upOpts));
+                callback();
+            }
+        }
+        
+        // Start with mousedown on from square
+        const downOpts = { bubbles: true, cancelable: true, composed: true, clientX: fromPos.x, clientY: fromPos.y, button: 0, buttons: 1 };
+        fromEl.dispatchEvent(new PointerEvent("pointerdown", { ...downOpts, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+        fromEl.dispatchEvent(new MouseEvent("mousedown", downOpts));
+        
+        requestAnimationFrame(animate);
     }
+
     function queuePremove(uci) {
         const from = uci.substring(0, 2), to = uci.substring(2, 4);
         const promo = uci.length > 4 ? uci[4] : null;
@@ -3057,16 +3171,18 @@ if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] tr
         const toPos = getSquareCenter(to);
         if (!fromPos || !toPos) { console.warn(`[SF Engine] premove: can't find squares ${from}/${to}`); return false; }
         const fromEl = getSquareEl(from), toEl = getSquareEl(to);
-        simulateMouseClick(fromEl, fromPos.x, fromPos.y);
-        simulateMouseClick(toEl, toPos.x, toPos.y);
-        if (promo) {
-            setTimeout(() => {
-                const promoEl = document.querySelector(`cg-promotion [data-piece*="${promo}"]`) ||
-                    document.querySelector(`.promotion-piece q`) ||
-                    document.querySelector(`[data-square="${to}${promo}"]`);
-                if (promoEl) promoEl.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-            }, 80);
-        }
+        
+        // Use human-like mouse movement for premoves too
+        simulateHumanMouseMove(fromEl, toEl, fromPos, toPos, () => {
+            if (promo) {
+                setTimeout(() => {
+                    const promoEl = document.querySelector(`cg-promotion [data-piece*="${promo}"]`) ||
+                        document.querySelector(`.promotion-piece q`) ||
+                        document.querySelector(`[data-square="${to}${promo}"]`);
+                    if (promoEl) promoEl.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+                }, 80);
+            }
+        });
         console.log(`[SF Engine] premove queued: ${uci}`);
         return true;
     }
@@ -3108,7 +3224,27 @@ if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] tr
             if (m.from === from && m.to === to) {
                 const promotion = move.length > 4 ? move.substring(4, 5) : "q";
                 console.log(`[SF Engine] Executing move: ${from}${to}${promotion !== 'q' ? '=' + promotion : ''}`);
-                state.board.game.move({ ...m, promotion, animate: !0, userGenerated: !0 });
+                
+                // Human-like mouse movement instead of direct API call
+                const fromPos = getSquareCenter(from);
+                const toPos = getSquareCenter(to);
+                const fromEl = getSquareEl(from), toEl = getSquareEl(to);
+                
+                if (fromEl && toEl && fromPos && toPos) {
+                    simulateHumanMouseMove(fromEl, toEl, fromPos, toPos, () => {
+                        if (promotion !== 'q') {
+                            setTimeout(() => {
+                                const promoEl = document.querySelector(`cg-promotion [data-piece*="${promotion}"]`) ||
+                                    document.querySelector(`.promotion-piece q`) ||
+                                    document.querySelector(`[data-square="${to}${promotion}"]`);
+                                if (promoEl) promoEl.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+                            }, 60);
+                        }
+                    });
+                } else {
+                    // Fallback to direct API if elements not found
+                    state.board.game.move({ ...m, promotion, animate: !0, userGenerated: !0 });
+                }
                 return;
             }
         }
@@ -3281,6 +3417,8 @@ if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] tr
             const el = document.getElementById(id);
             if (el) el.style.display = visible ? "" : "none";
         };
+        show("rowHash", true);
+        show("rowThreads", true);
         show("rowMoveOverhead",  m.hasMoveOverhead);
         show("rowSkillLevel",    m.hasSkillLevel);
         show("rowLimitStrength", m.hasNNUE);
@@ -4123,6 +4261,12 @@ if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] tr
                                 <input type="number" id="localHashMB" min="1" max="2048" value="${settings.localHashMB}" style="width:70px;">
                             </div>
 
+                            <div class="row" id="rowThreads">
+                                <label>CPU Threads (1–4)</label>
+                                <input type="number" id="localThreads" min="1" max="4" value="${settings.localThreads}" style="width:70px;">
+                                <span style="font-size:0.72em; color:#666; margin-left:8px;">Requires engine restart. 1 = single-threaded.</span>
+                            </div>
+
                             <div class="row" id="rowMoveOverhead">
                                 <label>Move Overhead (ms)</label>
                                 <input type="number" id="localMoveOverhead" min="0" max="5000" value="${settings.localMoveOverhead}" style="width:70px;">
@@ -4372,6 +4516,16 @@ pvSettings: document.getElementById("pvSettings"),
         document.getElementById("localHashMB").oninput = (e) => {
             const v = parseInt(e.target.value) || 64;
             ms("localHashMB", v); sendOpt("Hash", v);
+        };
+
+        // ── Threads ───────────────────────────────────────────────────────────
+        document.getElementById("localThreads").oninput = (e) => {
+            const v = Math.min(4, Math.max(1, parseInt(e.target.value) || 1));
+            ms("localThreads", v);
+            // Threads requires engine restart to take effect
+            if (state.localEngine && state.engineStatus === "ready") {
+                console.log(`[SF Engine] Threads changed to ${v} — restart engine to apply`);
+            }
         };
 
         // ── Move Overhead ──────────────────────────────────────────────────
@@ -4898,7 +5052,11 @@ pvSettings: document.getElementById("pvSettings"),
     }
 
     function scheduleBackupPoll() {
-        const delay = getRandomInt(CONFIG.BACKUP_POLL_MIN_MS, CONFIG.BACKUP_POLL_MAX_MS);
+        // Adaptive polling: fast when our turn, slow when opponent's turn
+        const isMyTurn = isOurTurnNow();
+        const delay = isMyTurn 
+            ? getRandomInt(50, 100)           // 50-100ms when our turn
+            : getRandomInt(200, 500);         // 200-500ms when opponent's turn
         setTimeout(() => {
             try { checkAndAnalyze(); }
             catch (e) { console.error(`[SF Engine] backup poll failed:`, e); }
@@ -5028,6 +5186,40 @@ pvSettings: document.getElementById("pvSettings"),
         }
     });
     // --- END GLOBAL KEYBIND LISTENER ---
+
+    // --- AUTO-UPDATE CHECK ---
+    function checkForUpdate() {
+        if (typeof GM_xmlhttpRequest !== "function") return;
+        try {
+            const currentVer = GM_info?.script?.version || "0";
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: "https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js",
+                timeout: 8000,
+                onload: (res) => {
+                    const match = res.responseText.match(/@version\s+([\d.]+)/);
+                    if (match && match[1] !== currentVer) {
+                        console.log(`[SF Engine] New version available: ${match[1]} (current: ${currentVer})`);
+                        if (state.ui.panel && !state.updateNotified) {
+                            state.updateNotified = true;
+                            const banner = document.createElement("div");
+                            banner.style.cssText = "background:#ff6b35;color:#fff;padding:8px 12px;border-radius:4px;margin:4px 0;font-size:12px;cursor:pointer;text-align:center;";
+                            banner.innerHTML = `🔄 Update v${match[1]} available! Click to reload.`;
+                            banner.onclick = () => location.reload();
+                            state.ui.panel.insertBefore(banner, state.ui.panel.firstChild);
+                        }
+                    }
+                }
+            });
+        } catch (e) {}
+    }
+    // Check every 30 minutes
+    setInterval(checkForUpdate, 30 * 60 * 1000);
+    // Initial check after 10 seconds
+    setTimeout(checkForUpdate, 10000);
+
+    // LAZY LOAD: Don't preload engine. Load only when user switches to Local mode.
+    // setTimeout(loadLocalEngine, 2000);  // DISABLED
 
     // Start event-driven polling instead of fixed 50ms interval
     setupBoardObserver();
