@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.46
+// @version          11.14.47
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -12365,6 +12365,7 @@ self.onmessage = function(e) {
                 state.pendingMoveDelay = 0;
                 state.pendingLocalFEN = null;
                 state.pendingLocalDepth = null;
+                state.pendingAbortEchoes = 0;
                 state.lastSanitizedBoardFEN = "";
                 if (state.currentCloudRequest) { try { state.currentCloudRequest.abort(); } catch (_) {} state.currentCloudRequest = null; }
                 updateUI();
