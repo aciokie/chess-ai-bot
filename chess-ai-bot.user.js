@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.44
+// @version          11.14.45
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -12464,10 +12464,11 @@ self.onmessage = function(e) {
                             state.moveTargetTime = performance.now() + bookDelay;
                             state.pendingMoveDelay = bookDelay; // Use book delay for triggerAutoMove
                             updateUI();
-                            // CRITICAL: Clear isThinking NOW so opponent's reply doesn't get blocked
-                            state.isThinking = false;
+                            // CRITICAL: Clear isThinking INSIDE the timeout so opponent's reply doesn't get blocked
+                            // (matching fats.js behavior - isThinking cleared AFTER delay, not before)
                             state.pendingAnalysis = setTimeout(() => {
                                 state.pendingAnalysis = null;
+                                state.isThinking = false; // Match fats.js: clear isThinking AFTER delay
                                 try {
                                     processBestMove(bookMove, 0, null, [bookMove], null, bookDelay / 1000, 0, true, finalFEN);
                                     if (settings.showEvalBar) EvalBar.update(0, null);
