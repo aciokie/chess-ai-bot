@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.40
+// @version          11.14.41
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -13392,6 +13392,11 @@ const wait = settings.bulletMode
                     // Fallback to direct API if elements not found
                     state.board.game.move({ ...m, promotion, animate: !0, userGenerated: !0 });
                 }
+                // Clear any pending analysis since we just moved (no longer our turn)
+                if (state.pendingAnalysis) {
+                    clearTimeout(state.pendingAnalysis);
+                    state.pendingAnalysis = null;
+                }
                 return;
             }
         }
@@ -15190,12 +15195,28 @@ pvSettings: document.getElementById("pvSettings"),
                     state.pendingAnalysis = setTimeout(() => {
                         state.pendingAnalysis = null;
                         try {
-                            analyze(settings.depth);
+                            // Re-check it's still our turn at execution time
+                            const board = state.board;
+                            if (board?.game) {
+                                const tn = board.game.getTurn();
+                                const pa = board.game.getPlayingAs();
+                                const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
+                                const paNum = (pa === 1 || pa === "w" || pa === "white") ? 1 : 2;
+                                if (turnNum === paNum) {
+                                    analyze(settings.depth);
+                                }
+                            }
                         } catch (e) {
                             console.error(`[SF Engine] scheduled analyze failed:`, e);
                             handleError("Analyze failed", e);
                         }
                     }, glanceMs);
+                }
+            } else if (!isTurn) {
+                // Not our turn anymore - clear any pending analysis
+                if (state.pendingAnalysis) {
+                    clearTimeout(state.pendingAnalysis);
+                    state.pendingAnalysis = null;
                 }
             }
         }
