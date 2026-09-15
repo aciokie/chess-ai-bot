@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.48
+// @version          11.14.49
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -13075,99 +13075,90 @@ self.onmessage = function(e) {
 function triggerAutoMove(fen = null) {
   if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] triggerAutoMove aborted: no bestMove or no board`); return; }
   const tn = state.board.game.getTurn();
-      const pa = state.board.game.getPlayingAs();
-      const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
-      const paNum = (pa === 1 || pa === "w" || pa === "white") ? 1 : 2;
-      if (turnNum !== paNum) { console.warn(`[SF Engine] triggerAutoMove aborted: not our turn (turn=${turnNum}, playingAs=${paNum})`); return; }
+  const pa = state.board.game.getPlayingAs();
+  const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
+  const paNum = (pa === 1 || pa === "w" || pa === "white") ? 1 : 2;
+  if (turnNum !== paNum) { console.warn(`[SF Engine] triggerAutoMove aborted: not our turn (turn=${turnNum}, playingAs=${paNum})`); return; }
 
-      // Check if engine worker is still alive
-      if (!state.localEngine || state.engineStatus !== "ready") {
-          console.warn(`[SF Engine] triggerAutoMove aborted: engine not ready (status=${state.engineStatus}, hasEngine=${!!state.localEngine})`);
-          state.isThinking = false;
-          loadLocalEngine();
-          return;
+  // Race condition guard: verify the board hasn't changed since THIS analysis
+  // started. `fen` is the exact position this move was computed for (captured
+  // at dispatch), NOT the shared lastSentFEN — a newer analyze() overwrites
+  // lastSentFEN, which let stale final callbacks stroke the wrong squares.
+  const analyzedFEN = fen || state.lastSentFEN;
+  if (!analyzedFEN) { console.warn(`[SF Engine] triggerAutoMove aborted: no analyzed FEN`); return; }
+  const currentRaw = getRawBoardFEN();
+  if (currentRaw && sanitizeFEN(currentRaw).split(" ")[0] !== analyzedFEN.split(" ")[0]) {
+      console.warn(`[SF Engine] triggerAutoMove aborted: board changed since analysis (analyzed=${analyzedFEN.split(" ")[0]}, current=${sanitizeFEN(currentRaw).split(" ")[0]})`);
+      return;
+  }
+
+  // Forced winning mate: play the mating move instantly (pre-move-style) and
+  // never let the humanizer deviate off the forced win. Each mating move is
+  // re-confirmed on our turn, so the full mate plays out across turns even if
+  // the opponent deviates within their (still losing) legal replies.
+  const mateNorm = state.currentMateNorm;
+  if (mateNorm !== null && mateNorm > 0) {
+      console.log(`[SF Engine] Mate in ${mateNorm}, playing best move immediately`);
+      scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), 0);
+      return;
+  }
+
+  // Occasional suboptimal move when winning big (stealth)
+  const evalForMistake = state.localEval !== null ? parseFloat(state.localEval) : null;
+  const mateForMistake = state.localMate;
+  if (shouldPlaySuboptimalMove(evalForMistake, mateForMistake)) {
+      const alts = state.humanAlternatives || [];
+      if (alts.length >= 2) {
+          // Pick 2nd or 3rd best move
+          const idx = Math.random() < 0.6 ? 1 : 2;
+          if (alts[idx] && alts[idx].move) {
+              console.log(`[SF Engine] Stealth: playing suboptimal ${alts[idx].move} (winPct=${getMoveWinPct(alts[idx].evalRaw, alts[idx].mate)})`);
+              const wait = settings.bulletMode ? (state.pendingMoveDelay || 0) : Math.max(0, state.moveTargetTime - performance.now());
+              scheduleAutoMove(() => playMove(alts[idx].move, analyzedFEN), wait);
+              return;
+          }
       }
+  }
 
-      // Race condition guard: verify the board hasn't changed since THIS analysis
-     // started. `fen` is the exact position this move was computed for (captured
-     // at dispatch), NOT the shared lastSentFEN — a newer analyze() overwrites
-     // lastSentFEN, which let stale final callbacks stroke the wrong squares.
-     const analyzedFEN = fen || state.lastSentFEN;
-     if (!analyzedFEN) { console.warn(`[SF Engine] triggerAutoMove aborted: no analyzed FEN`); return; }
-     const currentRaw = getRawBoardFEN();
-     if (currentRaw && sanitizeFEN(currentRaw).split(" ")[0] !== analyzedFEN.split(" ")[0]) {
-         console.warn(`[SF Engine] triggerAutoMove aborted: board changed since analysis (analyzed=${analyzedFEN.split(" ")[0]}, current=${sanitizeFEN(currentRaw).split(" ")[0]})`);
-         return;
-     }
-
-// Forced winning mate: play the mating move instantly (pre-move-style) and
-      // never let the humanizer deviate off the forced win. Each mating move is
-      // re-confirmed on our turn, so the full mate plays out across turns even if
-      // the opponent deviates within their (still losing) legal replies.
- const mateNorm = state.currentMateNorm;
-       if (mateNorm !== null && mateNorm > 0) {
-           console.log(`[SF Engine] Mate in ${mateNorm}, playing best move immediately`);
-           const mateWait = settings.bulletMode ? (state.pendingMoveDelay || 0) : 0;
-           scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), mateWait);
-           return;
-       }
-
-      // Occasional suboptimal move when winning big (stealth)
-      const evalForMistake = state.localEval !== null ? parseFloat(state.localEval) : null;
-      const mateForMistake = state.localMate;
-      if (shouldPlaySuboptimalMove(evalForMistake, mateForMistake)) {
-          const alts = state.humanAlternatives || [];
-          if (alts.length >= 2) {
-              // Pick 2nd or 3rd best move
-              const idx = Math.random() < 0.6 ? 1 : 2;
-              if (alts[idx] && alts[idx].move) {
-                  console.log(`[SF Engine] Stealth: playing suboptimal ${alts[idx].move} (winPct=${getMoveWinPct(alts[idx].evalRaw, alts[idx].mate)})`);
+  if (!shouldPlayBestMove()) {
+      const alts = state.humanAlternatives || [];
+      console.log(`[SF Engine] Humanizer active, alternatives=${alts.length}`);
+      if (alts.length >= 2) {
+          const weights = [0.70, 0.20, 0.10];
+          const bestWin = getMoveWinPct(alts[0].evalRaw, alts[0].mate);
+          const safe = [];
+          for (let i = 1; i < alts.length; i++) {
+              const a = alts[i];
+              const aw = getMoveWinPct(a.evalRaw, a.mate);
+              const flipsLoss = bestWin >= 50 && aw < 50;
+              if (!flipsLoss && (bestWin - aw) <= 20) safe.push(a);
+          }
+          if (safe.length >= 1) {
+              safe.sort((a, b) => getMoveWinPct(b.evalRaw, b.mate) - getMoveWinPct(a.evalRaw, a.mate));
+              const w = weights.slice(0, safe.length);
+              let total = 0; for (let k = 0; k < w.length; k++) total += w[k];
+              let r = Math.random() * total;
+              let chosen = safe[safe.length - 1];
+              for (let k = 0; k < safe.length; k++) {
+                  r -= w[k];
+                  if (r <= 0) { chosen = safe[k]; break; }
+              }
+              if (chosen && chosen.move) {
+                  console.log(`[SF Engine] Humanizer chose alternative: ${chosen.move} (winPct=${getMoveWinPct(chosen.evalRaw, chosen.mate)})`);
                   const wait = settings.bulletMode ? (state.pendingMoveDelay || 0) : Math.max(0, state.moveTargetTime - performance.now());
-                  scheduleAutoMove(() => playMove(alts[idx].move, analyzedFEN), wait);
+                  scheduleAutoMove(() => playMove(chosen.move, analyzedFEN), wait);
                   return;
               }
           }
       }
+  }
 
-  if (!shouldPlayBestMove()) {
-         const alts = state.humanAlternatives || [];
-         console.log(`[SF Engine] Humanizer active, alternatives=${alts.length}`);
-         if (alts.length >= 2) {
-             const weights = [0.70, 0.20, 0.10];
-             const bestWin = getMoveWinPct(alts[0].evalRaw, alts[0].mate);
-             const safe = [];
-             for (let i = 1; i < alts.length; i++) {
-                 const a = alts[i];
-                 const aw = getMoveWinPct(a.evalRaw, a.mate);
-                 const flipsLoss = bestWin >= 50 && aw < 50;
-                 if (!flipsLoss && (bestWin - aw) <= 20) safe.push(a);
-             }
-             if (safe.length >= 1) {
-                 safe.sort((a, b) => getMoveWinPct(b.evalRaw, b.mate) - getMoveWinPct(a.evalRaw, a.mate));
-                 const w = weights.slice(0, safe.length);
-                 let total = 0; for (let k = 0; k < w.length; k++) total += w[k];
-                 let r = Math.random() * total;
-                 let chosen = safe[safe.length - 1];
-                 for (let k = 0; k < safe.length; k++) {
-                     r -= w[k];
-                     if (r <= 0) { chosen = safe[k]; break; }
-                 }
-if (chosen && chosen.move) {
-                      console.log(`[SF Engine] Humanizer chose alternative: ${chosen.move} (winPct=${getMoveWinPct(chosen.evalRaw, chosen.mate)})`);
-                      const wait = settings.bulletMode ? (state.pendingMoveDelay || 0) : Math.max(0, state.moveTargetTime - performance.now());
-                      scheduleAutoMove(() => playMove(chosen.move, analyzedFEN), wait);
-                      return;
-                  }
-             }
-         }
-     }
-
-const wait = settings.bulletMode 
-          ? (state.pendingMoveDelay || 0) 
-          : Math.max(0, state.moveTargetTime - performance.now());
+  const wait = settings.bulletMode 
+        ? (state.pendingMoveDelay || 0) 
+        : Math.max(0, state.moveTargetTime - performance.now());
       console.log(`[SF Engine] Playing best move: ${state.currentBestMove} after ${wait}ms`);
       scheduleAutoMove(() => playMove(state.currentBestMove, analyzedFEN), wait);
- }
+}
     function handleError(type, err) {
         state.isThinking = !1;
         state.pendingMoveDelay = 0;
@@ -13251,39 +13242,39 @@ const wait = settings.bulletMode
     function queuePremove(uci) {
         const from = uci.substring(0, 2), to = uci.substring(2, 4);
         const promo = uci.length > 4 ? uci[4] : null;
-        const fromPos = getSquareCenter(from);
-        const toPos = getSquareCenter(to);
-        if (!fromPos || !toPos) { console.warn(`[SF Engine] premove: can't find squares ${from}/${to}`); return false; }
-        const fromEl = getSquareEl(from), toEl = getSquareEl(to);
         
-        // Use human-like mouse movement for premoves too
-        simulateHumanMouseMove(fromEl, toEl, fromPos, toPos, () => {
-            if (promo) {
-                setTimeout(() => {
-                    const promoEl = document.querySelector(`cg-promotion [data-piece*="${promo}"]`) ||
-                        document.querySelector(`.promotion-piece q`) ||
-                        document.querySelector(`[data-square="${to}${promo}"]`);
-                    if (promoEl) promoEl.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-                }, 80);
-            }
-        });
         console.log(`[SF Engine] premove queued: ${uci}`);
-        return true;
+        
+        // Direct API call (matching fats.js) - more reliable than mouse simulation
+        if (!state.board?.game) return false;
+        for (const m of state.board.game.getLegalMoves()) {
+            if (m.from === from && m.to === to) {
+                const promotion = promo || (uci.length > 4 ? uci[4] : "q");
+                try {
+                    state.board.game.move({ ...m, promotion, animate: !0, userGenerated: !0 });
+                    if (promo) {
+                        // Handle promotion selection if needed
+                        setTimeout(() => {
+                            const promoEl = document.querySelector(`cg-promotion [data-piece*="${promo}"]`) ||
+                                document.querySelector(`.promotion-piece q`) ||
+                                document.querySelector(`[data-square="${to}${promo}"]`);
+                            if (promoEl) promoEl.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+                        }, 80);
+                    }
+                    return true;
+                } catch (e) {
+                    console.warn(`[SF Engine] premove failed: ${e.message}`);
+                    return false;
+                }
+            }
+        }
+        console.warn(`[SF Engine] premove: move ${uci} not in legal moves`);
+        return false;
     }
 
     function playMove(move, fen = null, playingAs = null) {
         console.log(`[SF Engine] playMove: ${move}`);
         if (!state.board?.game) { console.warn(`[SF Engine] playMove aborted: no board`); return; }
-        
-        // Check if engine worker is still alive before playing
-        if (!state.localEngine || state.engineStatus !== "ready") {
-            console.warn(`[SF Engine] playMove aborted: engine not ready (status=${state.engineStatus}, hasEngine=${!!state.localEngine})`);
-            state.isThinking = false;
-            state.pendingLocalFEN = fen;
-            state.pendingLocalDepth = 1;
-            loadLocalEngine();
-            return;
-        }
         
         // Final turn check at execution time
         const tn = state.board.game.getTurn();
@@ -13309,26 +13300,8 @@ const wait = settings.bulletMode
                 const promotion = move.length > 4 ? move.substring(4, 5) : "q";
                 console.log(`[SF Engine] Executing move: ${from}${to}${promotion !== 'q' ? '=' + promotion : ''}`);
                 
-                // Human-like mouse movement instead of direct API call
-                const fromPos = getSquareCenter(from);
-                const toPos = getSquareCenter(to);
-                const fromEl = getSquareEl(from), toEl = getSquareEl(to);
-                
-                if (fromEl && toEl && fromPos && toPos) {
-                    simulateHumanMouseMove(fromEl, toEl, fromPos, toPos, () => {
-                        if (promotion !== 'q') {
-                            setTimeout(() => {
-                                const promoEl = document.querySelector(`cg-promotion [data-piece*="${promotion}"]`) ||
-                                    document.querySelector(`.promotion-piece q`) ||
-                                    document.querySelector(`[data-square="${to}${promotion}"]`);
-                                if (promoEl) promoEl.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-                            }, 60);
-                        }
-                    });
-                } else {
-                    // Fallback to direct API if elements not found
-                    state.board.game.move({ ...m, promotion, animate: !0, userGenerated: !0 });
-                }
+                // Direct API call (matching fats.js) - more reliable than mouse simulation
+                state.board.game.move({ ...m, promotion, animate: !0, userGenerated: !0 });
                 // Clear any pending analysis since we just moved (no longer our turn)
                 if (state.pendingAnalysis) {
                     clearTimeout(state.pendingAnalysis);
