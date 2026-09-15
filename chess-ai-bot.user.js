@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.14.41
+// @version          11.14.42
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -329,8 +329,6 @@ const LOCAL_ENGINES = [
         pendingAnalysis: null,
         pendingLocalFEN: null,
         pendingLocalDepth: null,
-        pendingPositionFEN: null,
-        pendingGoCmd: null,
         pendingAutoMoveTimeout: null,
         heartbeatMisses: 0,
         lastWorkerProbeAt: 0,
@@ -12296,7 +12294,7 @@ self.onmessage = function(e) {
     }
 
     function triggerFallback() {
-        // Cloud -> Local fallback (original behavior)
+        // Cloud -> Local fallback (original behavior, matching fats.js)
         if (settings.engineMode !== 'local') {
             console.warn(`API Error. Switching to Local SF18 at Depth ${settings.depth}.`);
             state.isThinking = false;
@@ -12309,25 +12307,6 @@ self.onmessage = function(e) {
             updateUI();
             return;
         }
-        
-        // Local -> Cloud fallback (if local fails)
-        console.warn(`Local engine failed. Switching to Cloud SF18.`);
-        if (state.localEngine) {
-            try { state.localEngine.terminate(); } catch (_) {}
-            state.localEngine = null;
-        }
-        if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
-        state.pendingReadyProbe = false;
-        state.engineStatus = "not_installed";
-        state.engineLoadingInProgress = false;
-        
-        settings.engineMode = "cloud";
-        saveSetting("engineMode", "cloud");
-        if (state.ui.selMode) state.ui.selMode.value = "cloud";
-        if (state.lastSanitizedBoardFEN) {
-            setTimeout(() => analyze(settings.depth), 100);
-        }
-        updateUI();
     }
     function computeSmartDepth(userDepth) {
         let d = userDepth;
@@ -12628,15 +12607,12 @@ self.onmessage = function(e) {
         const goCmd = `go depth ${actualDepth}`;
         console.log(`[SF Engine] → ${goCmd}`);
         state.currentSearchFEN = fen;
-        // Always stop any ongoing search before ucinewgame (harmless if idle)
-        // This fixes the hang when book moves interrupt a running search
-        state.localEngine.postMessage("stop");
-        state.pendingAbortEchoes = (state.pendingAbortEchoes || 0) + 1;
-        state.localEngine.postMessage("ucinewgame");
-        state.localEngine.postMessage("isready");
-        // Defer position+go until readyok received (handled in handleLocalMessage)
-        state.pendingPositionFEN = fen;
-        state.pendingGoCmd = goCmd;
+        state.localEngine.postMessage(`position fen ${fen}`);
+        state.localEngine.postMessage(goCmd);
+        // A dispatch that interrupts a running search makes the old search's
+        // bestmove an abort-echo: it was computed for a FEN we've abandoned.
+        // Count it so the bestmove handler drops that stale result.
+        if (wasThinking) state.pendingAbortEchoes = (state.pendingAbortEchoes || 0) + 1;
         state.lastPayload = `Worker CMDs:\nsetoption name MultiPV value ${wantMultiPV}\nposition fen ${fen}\ngo depth ${actualDepth}`;
         state.ui.liveOutput.textContent = "⚡ Local SF18 Analysis...";
         updateUI();
@@ -12715,9 +12691,8 @@ self.onmessage = function(e) {
                 state.isThinking = !1;
                 analyzeLocal(fFEN, fDepth, true);
             }
-
-            // Start heartbeat NOW that engine is fully initialized (after uciok)
-            // This avoids killing worker during WASM compilation (30-60s)
+            // Heartbeat runs during loading (waiting for uciok/readyok)
+            // Once engine is ready, heartbeat stops - worker beacon proves liveness
             state.pendingReadyProbe = true;
             state.heartbeatMisses = 0;
             const stopHeartbeat = () => {
@@ -12725,13 +12700,7 @@ self.onmessage = function(e) {
                 state.pendingReadyProbe = false;
             };
             state.engineHeartbeatTimer = setInterval(() => {
-                if (!state.localEngine || state.engineStatus !== "ready") { stopHeartbeat(); return; }
-                // If engine is thinking, don't send isready and don't count misses
-                // The search will complete and send bestmove, which proves liveness
-                if (state.isThinking) {
-                    state.heartbeatMisses = 0;
-                    return;
-                }
+                if (!state.localEngine || state.engineStatus !== "loading") { stopHeartbeat(); return; }
                 // Worker-side probes (3s alive beacon) reset the miss counter —
                 // beacons prove the event loop is free; their absence means the
                 // script is blocked (dead or mid-compile). A blocked-but-alive
@@ -12772,16 +12741,6 @@ self.onmessage = function(e) {
                 setEngineStatus("ready", "");
                 state.lastMoveResult = `✅ ${m.label} ready.`;
                 updateUI();
-            }
-            // Send pending position+go commands (from analyzeLocal's ucinewgame flow)
-            if (state.pendingPositionFEN && state.pendingGoCmd && state.localEngine) {
-                console.log(`[SF Engine] → position fen ${state.pendingPositionFEN}`);
-                console.log(`[SF Engine] → ${state.pendingGoCmd}`);
-                state.currentSearchFEN = state.pendingPositionFEN;
-                state.localEngine.postMessage(`position fen ${state.pendingPositionFEN}`);
-                state.localEngine.postMessage(state.pendingGoCmd);
-                state.pendingPositionFEN = null;
-                state.pendingGoCmd = null;
             }
             if (state.pendingLocalFEN && state.localEngine) {
                 console.log(`[SF Engine] Processing pending FEN after readyok`);
@@ -12853,6 +12812,7 @@ self.onmessage = function(e) {
             if ((state.pendingAbortEchoes || 0) > 0) {
                 state.pendingAbortEchoes--;
                 console.warn(`[SF Engine] dropped stale bestmove (aborted search echo, ${state.pendingAbortEchoes} remaining)`);
+                state.lastSanitizedBoardFEN = "";
                 updateUI();
                 return;
             }
@@ -13112,8 +13072,6 @@ self.onmessage = function(e) {
 
 function triggerAutoMove(fen = null) {
   if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] triggerAutoMove aborted: no bestMove or no board`); return; }
-  // Don't execute if we're still thinking (new analysis in progress)
-  if (state.isThinking) { console.warn(`[SF Engine] triggerAutoMove aborted: analysis still in progress`); return; }
   const tn = state.board.game.getTurn();
       const pa = state.board.game.getPlayingAs();
       const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
@@ -13213,35 +13171,12 @@ const wait = settings.bulletMode
         state.pendingMoveDelay = 0;
         state.pendingLocalFEN = null;
         state.pendingLocalDepth = null;
-        state.pendingPositionFEN = null;
-        state.pendingGoCmd = null;
         state.pendingAbortEchoes = 0;
         console.error(`[SF Engine] ${type}:`, err);
         console.error(`[SF Engine] Error stack:`, err?.stack);
         console.error(`[SF Engine] State at error: engineStatus=${state.engineStatus}, isThinking=${state.isThinking}, hasEngine=${!!state.localEngine}`);
         state.lastResponse = `${type}: ${err?.message || err}`;
         state.lastMoveResult = `❌ ${type}`;
-        
-        // If local engine failed and we're not already in cloud mode, fallback to cloud
-        if (settings.engineMode === "local" && state.engineStatus === "error") {
-            console.warn(`[SF Engine] Local engine error, falling back to cloud...`);
-            // Terminate local engine to avoid conflicts
-            if (state.localEngine) {
-                try { state.localEngine.terminate(); } catch (_) {}
-                state.localEngine = null;
-            }
-            if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
-            state.pendingReadyProbe = false;
-            state.engineStatus = "not_installed";
-            state.engineLoadingInProgress = false;
-            
-            settings.engineMode = "cloud";
-            saveSetting("engineMode", "cloud");
-            if (state.ui.selMode) state.ui.selMode.value = "cloud";
-            if (state.lastSanitizedBoardFEN) {
-                setTimeout(() => analyze(settings.depth), 100);
-            }
-        }
         
         updateUI();
     }
