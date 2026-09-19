@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.6.0
+// @version          11.6.1
 // @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -398,6 +398,21 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         settings.localContempt      = g("localContempt",     d.contempt      ?? 24);
     }
 
+    // Load a compiled module from IndexedDB for a specific model
+    function loadCompiledModule(modelId, cb) {
+        openCache((dbErr, db) => {
+            if (dbErr || !db) { cb(null); return; }
+            const moduleKey = modelId + "_patched_module";
+            readCache(db, moduleKey, (_, cached) => {
+                if (cached && cached.v === MODULE_CACHE_VERSION && cached.module) {
+                    cb(cached.module);
+                } else {
+                    cb(null);
+                }
+            });
+        });
+    }
+
     function loadSettings() {
         Object.keys(DEFAULT_SETTINGS).forEach((k) => {
             if (k === "engineMode") return; // always start in LOCAL mode
@@ -441,6 +456,17 @@ const scheduleAutoMove = (fn, delayMs) => {
                 console.warn(`[SF Engine] Auto-move cancelled: not our turn anymore (turn=${turnNum}, playingAs=${paNum})`);
                 return;
             }
+            // Verify the move is still legal on the current board
+            const move = state.currentBestMove;
+            if (move) {
+                const from = move.substring(0, 2);
+                const to = move.substring(2, 4);
+                const legal = state.board.game.getLegalMoves().some(m => m.from === from && m.to === to);
+                if (!legal) {
+                    console.warn(`[SF Engine] Auto-move cancelled: move ${move} no longer legal`);
+                    return;
+                }
+            }
         }
         fn();
     }, delayMs);
@@ -468,7 +494,10 @@ const getMoveWinPct = (cp, mate) => {
         try {
             if (typeof state.board.game.getFEN === "function") return state.board.game.getFEN();
             if (typeof state.board.game.fen === "string") return state.board.game.fen;
-            if (state.board.game.getPosition) return state.board.game.getPosition();
+            // getPosition() might return an object, not a FEN string
+            const pos = state.board.game.getPosition;
+            if (typeof pos === "string") return pos;
+            if (pos && typeof pos === "object" && pos.fen) return pos.fen;
         } catch (e) {}
         return null;
     }
@@ -552,8 +581,15 @@ const getMoveWinPct = (cp, mate) => {
                 }
             }
         },
+        // Clear all visual intervals - call when visualType changes
+        clearAllIntervals: () => {
+            state.visuals.forEach(v => {
+                if (v.interval) clearInterval(v.interval);
+                v.interval = null;
+            });
+        },
         draw: (id, move) => {
-            state.board = document.querySelector(CONFIG.BOARD_SEL);
+            // Use memoized board instead of querying selector every time
             if (!state.board) return;
             const root = ShadowKit.boardRoot(state.board);
             if (root.querySelector(`.${id}`)) return;
@@ -1013,9 +1049,12 @@ const getMoveWinPct = (cp, mate) => {
         },
 
         lookup: (fen) => {
+            // Normalize FEN to handle side-to-move, castling rights, en passant
+            // Only use piece placement + side to move for lookup (castling/en passant handled by engine)
             const parts = fen.split(" ");
-            const boardOnly = parts[0];
-            return OpeningBook.book[boardOnly] || null;
+            if (parts.length < 2) return null;
+            const normalized = parts[0] + " " + parts[1]; // piece placement + side to move
+            return OpeningBook.book[normalized] || OpeningBook.book[parts[0]] || null;
         },
 
         enabled: true,
@@ -1160,7 +1199,7 @@ const getMoveWinPct = (cp, mate) => {
         node: null,
         ensure: () => {
             const board = state.board || document.querySelector(CONFIG.BOARD_SEL);
-            if (!board) return;
+            if (!board || !(board instanceof Node)) return;
             if (HighlightObserver.observer && HighlightObserver.node === board) return;
             if (HighlightObserver.observer) HighlightObserver.observer.disconnect();
             HighlightObserver.node = board;
@@ -1170,7 +1209,12 @@ const getMoveWinPct = (cp, mate) => {
                 ThreatDetector.draw();
                 PV.draw();
             });
-            HighlightObserver.observer.observe(board, { subtree: true, childList: true });
+            try {
+                HighlightObserver.observer.observe(board, { subtree: true, childList: true });
+            } catch (e) {
+                console.error(`[SF Engine] HighlightObserver error:`, e);
+                HighlightObserver.disconnect();
+            }
         },
         disconnect: () => {
             if (HighlightObserver.observer) { HighlightObserver.observer.disconnect(); HighlightObserver.observer = null; }
@@ -1940,6 +1984,7 @@ self.onmessage = function(e) {
             try { state.localEngine.terminate(); } catch (e) {}
             state.localEngine = null;
         }
+        AntiDraw.stop();
         state.engineLoadingInProgress = false;
         state.engineLoadGeneration++;
         state.engineRetryAt = 0;
@@ -2291,7 +2336,7 @@ self.onmessage = function(e) {
         } else if (!msg.startsWith("info")) {
             console.log(`[SF Engine] ← ${msg}`);
         }
-        state.lastResponse = (state.lastResponse.length > 500 ? "..." + state.lastResponse.slice(-500) : state.lastResponse) + "\n" + msg;
+        state.lastResponse = (state.lastResponse.length > 2000 ? "..." + state.lastResponse.slice(-2000) : state.lastResponse) + "\n" + msg;
         if (state.ui.logRec) state.ui.logRec.innerText = state.lastResponse;
 
         // Engine signals it's ready — flip status immediately.
@@ -4028,11 +4073,15 @@ pvSettings: document.getElementById("pvSettings"),
         const localModelSel = document.getElementById("localModelSel");
         localModelSel.onchange = (e) => {
             const newId = e.target.value;
-            // Shut down any currently running engine
+            // Shut down any currently running engine - clear handlers FIRST to prevent
+            // race condition where old engine's onerror fires after new engine loads
             if (state.localEngine) {
+                state.localEngine.onerror = null;
+                state.localEngine.onmessage = null;
                 try { state.localEngine.terminate(); } catch(_) {}
                 state.localEngine = null;
             }
+            AntiDraw.stop();
             state.engineLoadingInProgress = false;
             saveSetting("localModelId", newId);
             // Load this model's saved per-model settings into working state
@@ -4050,6 +4099,10 @@ pvSettings: document.getElementById("pvSettings"),
             updateLocalSettingsUI();
             state.engineLoadGeneration++;
             state.engineRetryAt = 0;
+            // Clear any pending analysis state
+            state.pendingLocalFEN = null;
+            state.pendingLocalDepth = null;
+            state.pendingAbortEchoes = 0;
             loadLocalEngine();
         };
         // Populate model info immediately on open
@@ -4233,7 +4286,7 @@ pvSettings: document.getElementById("pvSettings"),
         durSlider.oninput = updateDurUI;
         chkFade.onchange = (e) => saveSetting("visualFadeOut", e.target.checked);
         updateDurUI();
-        state.ui.visType.onchange = (e) => { saveSetting("visualType", e.target.value); toggleVisualInputs(); Visuals.removeByType('history'); if (state.currentBestMove) Visuals.add(state.currentBestMove, 'history'); };
+        state.ui.visType.onchange = (e) => { saveSetting("visualType", e.target.value); Visuals.clearAllIntervals(); toggleVisualInputs(); Visuals.removeByType('history'); if (state.currentBestMove) Visuals.add(state.currentBestMove, 'history'); };
         function toggleVisualInputs() {
             state.ui.visBoxSettings.style.display = "none";
             state.ui.visArrowSettings.style.display = "none";
@@ -4510,6 +4563,10 @@ pvSettings: document.getElementById("pvSettings"),
 
     function checkAndAnalyze() {
         state.board = document.querySelector(CONFIG.BOARD_SEL);
+        // Re-setup board observer if board element changed
+        if (state.board && state.board instanceof Node && (!state.boardObserver || state.boardObserver.element !== state.board)) {
+            setupBoardObserver();
+        }
         try { HighlightObserver.ensure(); } catch (e) { console.error(`[SF Engine] HighlightObserver failed:`, e); }
         if (settings.showEvalBar) {
             try {
@@ -4760,20 +4817,33 @@ pvSettings: document.getElementById("pvSettings"),
     // Set up MutationObserver to detect board changes (moves made)
     function setupBoardObserver() {
         const boardEl = document.querySelector(CONFIG.BOARD_SEL);
-        if (!boardEl) {
+        if (!boardEl || !(boardEl instanceof Node)) {
             setTimeout(setupBoardObserver, 500);
             return;
         }
-        state.boardObserver = new MutationObserver((mutations) => {
-            // Check if any mutation could indicate a move was made
-            for (const m of mutations) {
-                if (m.type === 'childList' || m.type === 'attributes') {
-                    checkAndAnalyze();
-                    break;
+        // If board element changed, disconnect old observer
+        if (state.boardObserver && state.boardObserver.element !== boardEl) {
+            state.boardObserver.disconnect();
+            state.boardObserver = null;
+        }
+        if (!state.boardObserver) {
+            state.boardObserver = new MutationObserver((mutations) => {
+                // Check if any mutation could indicate a move was made
+                for (const m of mutations) {
+                    if (m.type === 'childList' || m.type === 'attributes') {
+                        checkAndAnalyze();
+                        break;
+                    }
                 }
-            }
-        });
-        state.boardObserver.observe(boardEl, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+            });
+            state.boardObserver.element = boardEl;
+        }
+        try {
+            state.boardObserver.observe(boardEl, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+        } catch (e) {
+            console.error(`[SF Engine] Board observer error:`, e);
+            state.boardObserver = null;
+        }
     }
     // --- GLOBAL KEYBIND LISTENER ---
     document.addEventListener("keydown", (e) => {
