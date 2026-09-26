@@ -3,7 +3,7 @@
 ## Quick Facts
 - **Type**: Tampermonkey/Violentmonkey userscript (~277KB)
 - **Targets**: Chess.com only (`chess-board`, `wc-chess-board`) — Lichess support removed in v11.0.13
-- **Engine**: Stockfish WASM (18.0.5 primary) + 4 fallback models (16.0, 11.0, 10.0.2 asm.js, 9.0 asm.js)
+- **Engine**: Stockfish WASM (19.0.0 primary) + 4 fallback models (16.0, 11.0, 10.0.2 asm.js, 9.0 asm.js)
 - **Auto-updates**: `@updateURL` / `@downloadURL` → `https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js`
 - **Version**: `11.x.x` (bump on every push for TM to detect; current in `chess-ai-bot.user.js`)
 - **Source**: `chess-ai-bot.user.js` (single file, no build step)
@@ -66,6 +66,7 @@ npm test
 ## Model Registry (LOCAL_ENGINES)
 | id | label | format | maxDepth | hasNNUE | hasSlowMover | hasWDL | hasContempt | hasMinThink |
 |----|-------|--------|----------|---------|--------------|--------|-------------|-------------|
+| sf19_00 | Stockfish 19.0.0 | wasm | 25 | ✓ | ✗ | ✓ | ✓ | ✗ |
 | sf18_05 | Stockfish 18.0.5 | wasm | 25 | ✓ | ✗ | ✓ | ✓ | ✗ |
 | sf16_00 | Stockfish 16.0 | wasm | 25 | ✓ | ✓ | ✓ | ✓ | ✗ |
 | sf11_00 | Stockfish 11.0 | wasm | 20 | ✗ | ✓ | ✗ | ✓ | ✓ |
