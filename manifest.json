@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Chess AI Bot",
+  "version": "11.7.0",
+  "description": "Real-time Stockfish 19 analysis directly in your browser on Chess.com",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.chess.com/*",
+    "https://unpkg.com/*",
+    "https://chess-api.com/*",
+    "https://stockfish.online/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.chess.com/play/*",
+        "https://www.chess.com/game/*",
+        "https://www.chess.com/analysis",
+        "https://www.chess.com/analysis/*",
+        "https://www.chess.com/puzzles/*",
+        "https://www.chess.com/daily"
+      ],
+      "js": [
+        "gm-polyfill.js",
+        "chess-ai-bot.user.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
