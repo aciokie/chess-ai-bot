@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.6.1
-// @description   An extremely advanced Chess.com cheat menu with 7 Stockfish models (18.0.5 to 9.0), tons of powerful features, and countless customization options.
+// @version          11.7.0
+// @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
 // @updateURL     https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js
@@ -24,7 +24,7 @@
 // @grant         GM_setValue
 // @grant         GM_xmlhttpRequest
 // @grant         GM_info
-// @resource      stockfish.js https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.js
+// @resource      stockfish.js https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.js
 // @run-at        document-idle
 // ==/UserScript==
 (function () {
@@ -53,7 +53,7 @@
     };
     const STOCKFISH_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAAsTAAALEwEAmpwYAAAEGklEQVR4nO2ZW2gcVRjH/9+Z3ewm22xMNtVGU9RIxNqmFxF8sC0iFhF8UF980QcFL1jwaRELXnwQBC94UfBBEQtK0Yqi1LwgaL0k0DQm2zapm2az2d1kd2bO8f/M7Gw22U12052lB34wzMzO+Z/vO+d85ztnlkQIIYQQQgghhBBCSKtQSt1BCHmOEDKplLqD53n7x8fH9xBCfC2U0r2EkNcIIY/xPG9rIR4F8CGl9EEA+wghG5s9+yGl9F0A+9sKEEJ8B+A5AMcIIb6W/v8B4BCl9AkA+1oK8Ty/m1L6LID9hJCNzb7ZhRL6IoD9bQcopc8SQp4ghExt9mw/pfR5APtbcwH1C68W/l8B3wO463+xAOu5gH2EkG2EENSX8F4A+wkhG7mA+l3gVwD3tBCAUvoYIeQpQkh/s2f7KaVPAthfFw/4HsA+QsjGZt/sJ5Q+01oArvN9Qkh/s2f7KaWPE0L2112Au8D3AO4jhGxs9u0+SulTAPbXFfA9gP2EkI3NvttPKX0KwP66Ar4HsJ8QsrHZd/sppU8C2F9XwPcA9hNCNjb7bj+l9CkA++sK+B7AfYSQjc2+208pfQrA/rYClNI9hJCnCCHTmz3bTyl9CsD+tgOU0mcIIU8RQqY3e7afUvo0gP1tBSilz1BKnwGwv60A/H8uQAh5DsB+QsjGZt98Qil9DsD+1gKU0ucIIc8QQqY2e7afUvo8gP2tBaij0N8A7iOEbGz23X5K6fMA9tcV8D2A+wghG5t9t59S+iSA/XUFfA9gPyFkY7Pv9lNKTwLYX1fA9wDuI4RsbPbd/v8U4H/fA0II8Ty/mxDiA7C/Lh7wPID9hJCNzb7dTyl9EcD+ungA8Ty/mxDiA7C/pQCldC+l9EUA+1sK8Ty/hxDya0rpCwD2txTg/7kAIeR5APtbut8ghBBC2pZ/ALy683b5qZ2oAAAAAElFTkSuQmCC";
 
-    const DEFAULT_WASM_URL = "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm";
+    const DEFAULT_WASM_URL = "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.wasm";
 const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-installs";
 
     // ─── Local Engine Registry ──
@@ -87,6 +87,27 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
     // Per-model settings are persisted under keys like "m_sf18_05_hashMB" so
     // each model remembers its own last-used values independently.
     const LOCAL_ENGINES = [
+        {
+            id:      "sf19_00",
+            cacheKey: "sf19_00",
+            label:   "Stockfish 19.0.0",
+            cdn:     "unpkg",
+            format:  "wasm",
+            jsUrl:   "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.js",
+            wasmUrl: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.wasm",
+            maxDepth:        25,
+            hasHash:         true,
+            hasMoveOverhead: true,   // SF 9+
+            hasSlowMover:    false,  // removed in SF 17
+            hasSkillLevel:   true,
+            hasNNUE:         true,   // UCI_LimitStrength + UCI_Elo
+            hasWDL:          true,   // UCI_ShowWDL
+            hasContempt:     true,   // SF 14+ has Contempt
+            hasMinThink:     false,  // removed in SF 12
+            hasRepetition:   true,   // SF 14+ anti-repetition
+            defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
+                        limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
+        },
         {
             id:      "sf18_05",
             cacheKey: "sf18_05",
@@ -298,7 +319,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         menuOpacity: 0.9,
         debugLogs: !1,
         menuPosition: "top-right",
-        localModelId: "sf18_05",
+        localModelId: "sf19_00",
         // Per-model settings are stored under "m_<modelId>_<key>" via GM_setValue.
         // These flat keys are only used as in-memory working copies (loaded on model select).
         localHashMB: 64,
@@ -377,7 +398,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
 
     // Save a per-model setting for the given (or current) model
     function saveModelSetting(key, val, modelId) {
-        const mid = modelId || settings.localModelId || "sf18_05";
+        const mid = modelId || settings.localModelId || "sf19_00";
         settings[key] = val;
         GM_setValue(`m_${mid}_${key}`, val);
     }
@@ -421,7 +442,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         });
         settings.engineMode = "local";
         // Load per-model settings for the active model
-        loadModelSettings(settings.localModelId || "sf18_05");
+        loadModelSettings(settings.localModelId || "sf19_00");
     }
     // --- UTILITIES ---
     const getRandomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
@@ -1561,7 +1582,7 @@ self.onmessage = function(e) {
         const fullError = `[${errorType}] ${msg} at ${filename}:${lineno}:${colno}. Suggestion: ${suggestion}`;
         console.error(`[SF Engine] Worker error: ${fullError}`);
         console.error(`[SF Engine] Stack: ${stack}`);
-        const currentModel = getEngineById(settings.localModelId || "sf18_05");
+        const currentModel = getEngineById(settings.localModelId || "sf19_00");
         console.error(`[SF Engine] Context: engineStatus=${state.engineStatus}, model=${currentModel.label}, hasCache=${!!state.localEngine}`);
 
         handleError(`Engine Worker Error (${errorType})`, e);
@@ -1693,7 +1714,7 @@ self.onmessage = function(e) {
         console.log(`[SF Engine] loadLocalEngine START`);
         state.engineLoadingInProgress = true;
         state.isThinking = false;
-        const modelId = settings.localModelId || "sf18_05";
+        const modelId = settings.localModelId || "sf19_00";
         const m = getEngineById(modelId);
         const label = m.format === "asmjs" ? `${m.label} (asm.js)` : m.label;
         console.log(`[SF Engine] Loading model: ${label} (id=${modelId}, format=${m.format})`);
@@ -2350,7 +2371,7 @@ self.onmessage = function(e) {
             state.pendingReadyProbe = false;
             state.engineRetryAt = 0;
             if (state.engineStatus !== "ready") {
-                const m = getEngineById(settings.localModelId || "sf18_05");
+                const m = getEngineById(settings.localModelId || "sf19_00");
                 setEngineStatus("ready", "");
                 state.lastMoveResult = `✅ ${m.label} ready.`;
                 updateUI();
@@ -2368,7 +2389,7 @@ self.onmessage = function(e) {
             console.log(`[SF Engine] Received readyok`);
             state.pendingReadyProbe = false;
             if (state.engineStatus !== "ready") {
-                const m = getEngineById(settings.localModelId || "sf18_05");
+                const m = getEngineById(settings.localModelId || "sf19_00");
                 setEngineStatus("ready", "");
                 state.lastMoveResult = `✅ ${m.label} ready.`;
                 updateUI();
@@ -2993,7 +3014,7 @@ function triggerAutoMove(fen = null) {
         const btnUninstall = document.getElementById("btnLocalUninstall");
         if (!statusEl) return;
 
-        const m = getEngineById(settings.localModelId || "sf18_05");
+        const m = getEngineById(settings.localModelId || "sf19_00");
 
         // ── Status badge ──
         const statusMap = {
@@ -4502,7 +4523,7 @@ pvSettings: document.getElementById("pvSettings"),
         document.body.classList.add(`mode-${settings.engineMode}`);
         if (state.ui.debugArea) state.ui.debugArea.style.display = settings.debugLogs ? "flex" : "none";
         let maxD = 18;
-        if (settings.engineMode === "local") maxD = getEngineById(settings.localModelId || "sf18_05").maxDepth;
+        if (settings.engineMode === "local") maxD = getEngineById(settings.localModelId || "sf19_00").maxDepth;
         else if (settings.engineMode === "sfonline") maxD = 15;
         if (state.ui.lblMaxDepth) state.ui.lblMaxDepth.innerText = maxD;
         if (state.ui.inpDepth) state.ui.inpDepth.max = maxD;
