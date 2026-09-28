@@ -1430,13 +1430,25 @@ setInterval(function(){ self.postMessage("__probe:beacon " + Math.round(performa
 var _logFetch = function(u) { if (_probeCount++ < 20) self.postMessage("__probe:fetch " + String(u)); };
 self.fetch = function(url, opts) {
     _logFetch(url);
-    return Promise.resolve({
-        ok: true,
-        arrayBuffer: function() {
-            self.postMessage("__probe:arrayBuffer-read n=" + (_wasmBytes ? _wasmBytes.length : 0));
-            return Promise.resolve(_wasmBytes.buffer);
-        }
-    });
+    try {
+        var resp = new Response(_wasmBytes, {
+            status: 200,
+            statusText: "OK",
+            headers: { "Content-Type": "application/wasm" }
+        });
+        return Promise.resolve(resp);
+    } catch (e) {
+        return Promise.resolve({
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            headers: new Headers({ "Content-Type": "application/wasm" }),
+            arrayBuffer: function() {
+                self.postMessage("__probe:arrayBuffer-read n=" + (_wasmBytes ? _wasmBytes.length : 0));
+                return Promise.resolve(_wasmBytes.buffer || _wasmBytes);
+            }
+        });
+    }
 };
 self.onmessage = function(e) {
     var d = e.data || {};
