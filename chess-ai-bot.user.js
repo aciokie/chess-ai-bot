@@ -53,7 +53,7 @@
     };
     const STOCKFISH_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAAsTAAALEwEAmpwYAAAEGklEQVR4nO2ZW2gcVRjH/9+Z3ewm22xMNtVGU9RIxNqmFxF8sC0iFhF8UF980QcFL1jwaRELXnwQBC94UfBBEQtK0Yqi1LwgaL0k0DQm2zapm2az2d1kd2bO8f/M7Gw22U12052lB34wzMzO+Z/vO+d85ztnlkQIIYQQQgghhBBCSKtQSt1BCHmOEDKplLqD53n7x8fH9xBCfC2U0r2EkNcIIY/xPG9rIR4F8CGl9EEA+wghG5s9+yGl9F0A+9sKEEJ8B+A5AMcIIb6W/v8B4BCl9AkA+1oK8Ty/m1L6LID9hJCNzb7ZhRL6IoD9bQcopc8SQp4ghExt9mw/pfR5APtbcwH1C68W/l8B3wO463+xAOu5gH2EkG2EENSX8F4A+wkhG7mA+l3gVwD3tBCAUvoYIeQpQkh/s2f7KaVPAthfFw/4HsA+QsjGZt/sJ5Q+01oArvN9Qkh/s2f7KaWPE0L2112Au8D3AO4jhGxs9u0+SulTAPbXFfA9gP2EkI3NvttPKX0KwP66Ar4HsJ8QsrHZd/sppU8C2F9XwPcA9hNCNjb7bj+l9CkA++sK+B7AfYSQjc2+208pfQrA/rYClNI9hJCnCCHTmz3bTyl9CsD+tgOU0mcIIU8RQqY3e7afUvo0gP1tBSilz1BKnwGwv60A/H8uQAh5DsB+QsjGZt98Qil9DsD+1gKU0ucIIc8QQqY2e7afUvo8gP2tBaij0N8A7iOEbGz23X5K6fMA9tcV8D2A+wghG5t9t59S+iSA/XUFfA9gPyFkY7Pv9lNKTwLYX1fA9wDuI4RsbPbd/v8U4H/fA0II8Ty/mxDiA7C/Lh7wPID9hJCNzb7dTyl9EcD+ungA8Ty/mxDiA7C/pQCldC+l9EUA+1sK8Ty/hxDya0rpCwD2txTg/7kAIeR5APtbut8ghBBC2pZ/ALy683b5qZ2oAAAAAElFTkSuQmCC";
 
-    const DEFAULT_WASM_URL = "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.wasm";
+    const DEFAULT_WASM_URL = "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm";
 const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-installs";
 
     // ─── Local Engine Registry ──
@@ -109,13 +109,34 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
                         limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
         },
         {
+            id:      "sf19_small",
+            cacheKey: "sf19_small",
+            label:   "Stockfish 19.0.0 (Small/Lite)",
+            cdn:     "unpkg",
+            format:  "wasm",
+            jsUrl:   "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-lite-single.js",
+            wasmUrl: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-lite-single.wasm",
+            maxDepth:        20,
+            hasHash:         true,
+            hasMoveOverhead: true,
+            hasSlowMover:    false,
+            hasSkillLevel:   true,
+            hasNNUE:         true,
+            hasWDL:          true,
+            hasContempt:     true,
+            hasMinThink:     false,
+            hasRepetition:   true,
+            defaults: { hashMB: 32, moveOverhead: 100, skillLevel: 20,
+                        limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
+        },
+        {
             id:      "sf18_05",
             cacheKey: "sf18_05",
             label:   "Stockfish 18.0.5",
             cdn:     "unpkg",
             format:  "wasm",
-            jsUrl:   "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.js",
-            wasmUrl: "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm",
+            jsUrl:   "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-lite-single.js",
+            wasmUrl: "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-lite-single.wasm",
             // Capabilities
             maxDepth:        25,
             hasHash:         true,
@@ -319,7 +340,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         menuOpacity: 0.9,
         debugLogs: !1,
         menuPosition: "top-right",
-        localModelId: "sf19_00",
+        localModelId: "sf18_05",
         // Per-model settings are stored under "m_<modelId>_<key>" via GM_setValue.
         // These flat keys are only used as in-memory working copies (loaded on model select).
         localHashMB: 64,
@@ -1392,10 +1413,13 @@ const getMoveWinPct = (cp, mate) => {
         // In module mode, WebAssembly.instantiate is intercepted so the loader's
         // bytes-based instantiate call compiles NOTHING — it instantiates the
         // cached module directly (skips the entire 4-5s compile).
+        // CRITICAL: fetch mock ONLY intercepts the exact wasmUrl passed at launch.
+        // Broad patterns (.wasm, stockfish, unpkg) BLOCK Chess.com sockets!
         const moduleMode = !!compiledModule;
         const bootstrapCode = `
 var _wasmBytes = null;
 var _wasmModule = null;
+var _wasmUrl = null;
 var _modulePosted = false;
 var _origInstantiate = WebAssembly.instantiate;
 WebAssembly.instantiate = function(bufferOrModule, imports) {
@@ -1428,27 +1452,33 @@ self.postMessage("__probe:bootstrap-ready");
 var _probeCount = 0;
 setInterval(function(){ self.postMessage("__probe:beacon " + Math.round(performance.now())); }, 3000);
 var _logFetch = function(u) { if (_probeCount++ < 20) self.postMessage("__probe:fetch " + String(u)); };
+var _origFetch = self.fetch;
 self.fetch = function(url, opts) {
     _logFetch(url);
-    try {
-        var resp = new Response(_wasmBytes, {
-            status: 200,
-            statusText: "OK",
-            headers: { "Content-Type": "application/wasm" }
-        });
-        return Promise.resolve(resp);
-    } catch (e) {
-        return Promise.resolve({
-            ok: true,
-            status: 200,
-            statusText: "OK",
-            headers: new Headers({ "Content-Type": "application/wasm" }),
-            arrayBuffer: function() {
-                self.postMessage("__probe:arrayBuffer-read n=" + (_wasmBytes ? _wasmBytes.length : 0));
-                return Promise.resolve(_wasmBytes.buffer || _wasmBytes);
-            }
-        });
+    // ONLY intercept the EXACT wasmUrl passed at launch
+    if (_wasmUrl && String(url) === _wasmUrl) {
+        try {
+            var resp = new Response(_wasmBytes, {
+                status: 200,
+                statusText: "OK",
+                headers: { "Content-Type": "application/wasm" }
+            });
+            return Promise.resolve(resp);
+        } catch (e) {
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                statusText: "OK",
+                headers: new Headers({ "Content-Type": "application/wasm" }),
+                arrayBuffer: function() {
+                    self.postMessage("__probe:arrayBuffer-read n=" + (_wasmBytes ? _wasmBytes.length : 0));
+                    return Promise.resolve(_wasmBytes.buffer || _wasmBytes);
+                }
+            });
+        }
     }
+    // All other fetches pass through to real fetch (critical for Chess.com CSP)
+    return _origFetch(url, opts);
 };
 self.onmessage = function(e) {
     var d = e.data || {};
@@ -1457,9 +1487,11 @@ self.onmessage = function(e) {
             _wasmModule = d.wasmModule;
             _modulePosted = true;
             _wasmBytes = new Uint8Array(32);
+            _wasmUrl = d.wasmUrl || null;
             self.postMessage("__probe:module-mode");
         } else {
             _wasmBytes = new Uint8Array(d.wasmBytes);
+            _wasmUrl = d.wasmUrl || null;
             self.postMessage("__probe:bytes-received n=" + _wasmBytes.length);
         }
         self.onmessage = null;
