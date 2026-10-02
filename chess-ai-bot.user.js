@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.7.1
+// @version          11.7.2
 // @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -106,6 +106,27 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasMinThink:     false,  // removed in SF 12
             hasRepetition:   true,   // SF 14+ anti-repetition
             defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
+                        limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
+        },
+        {
+            id:      "sf19_lite",
+            cacheKey: "sf19_lite",
+            label:   "Stockfish 19.0.0 Lite",
+            cdn:     "unpkg",
+            format:  "wasm",
+            jsUrl:   "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-lite-single.js",
+            wasmUrl: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-lite-single.wasm",
+            maxDepth:        22,
+            hasHash:         true,
+            hasMoveOverhead: true,   // SF 9+
+            hasSlowMover:    false,  // removed in SF 17
+            hasSkillLevel:   true,
+            hasNNUE:         true,   // UCI_LimitStrength + UCI_Elo
+            hasWDL:          true,   // UCI_ShowWDL
+            hasContempt:     true,   // SF 14+ has Contempt
+            hasMinThink:     false,  // removed in SF 12
+            hasRepetition:   true,   // SF 14+ anti-repetition
+            defaults: { hashMB: 32, moveOverhead: 100, skillLevel: 20,
                         limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
         },
         {

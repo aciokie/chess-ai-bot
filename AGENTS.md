@@ -67,6 +67,7 @@ npm test
 | id | label | format | maxDepth | hasNNUE | hasSlowMover | hasWDL | hasContempt | hasMinThink |
 |----|-------|--------|----------|---------|--------------|--------|-------------|-------------|
 | sf19_00 | Stockfish 19.0.0 | wasm | 25 | ✓ | ✗ | ✓ | ✓ | ✗ |
+| sf19_lite | Stockfish 19.0.0 Lite | wasm | 22 | ✓ | ✗ | ✓ | ✓ | ✗ |
 | sf18_05 | Stockfish 18.0.5 | wasm | 25 | ✓ | ✗ | ✓ | ✓ | ✗ |
 | sf16_00 | Stockfish 16.0 | wasm | 25 | ✓ | ✓ | ✓ | ✓ | ✗ |
 | sf11_00 | Stockfish 11.0 | wasm | 20 | ✗ | ✓ | ✗ | ✓ | ✓ |
