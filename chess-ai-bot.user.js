@@ -111,11 +111,12 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         {
             id:      "sf19_small",
             cacheKey: "sf19_small",
-            label:   "Stockfish 19.0.0 (Small/Lite)",
-            cdn:     "unpkg",
+            label:   "Stockfish 19.0.0 (Embedded Small/Lite)",
+            cdn:     "embedded",
             format:  "wasm",
             jsUrl:   "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-lite-single.js",
-            wasmUrl: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-lite-single.wasm",
+            wasmUrl: "embedded://sf19_smallnet.wasm",
+            embeddedWasm: true,
             maxDepth:        20,
             hasHash:         true,
             hasMoveOverhead: true,
@@ -1918,6 +1919,20 @@ self.onmessage = function(e) {
 
                 const fetchWasm = (resolve, reject) => {
                     if (!m.wasmUrl) { console.log(`[SF Engine] No WASM URL for this model`); resolve(null); return; }
+                    // Handle embedded WASM (base64 in userscript)
+                    if (m.embeddedWasm && typeof EMBEDDED_SF19_SMALLNET_WASM_B64 !== 'undefined') {
+                        console.log(`[SF Engine] Using embedded WASM (base64, ${EMBEDDED_SF19_SMALLNET_WASM_B64.length} chars)`);
+                        try {
+                            const binary = atob(EMBEDDED_SF19_SMALLNET_WASM_B64);
+                            const bytes = new Uint8Array(binary.length);
+                            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                            if (db) writeCacheAsync(db, wasmKey, bytes).catch(() => {});
+                            resolve(bytes);
+                        } catch (e) {
+                            reject(new Error(`Embedded WASM decode failed: ${e.message || e}`));
+                        }
+                        return;
+                    }
                     if (db) {
                         readCache(db, wasmKey, (_, cachedWasm) => {
                             if (!isCurrentLoad()) return;
