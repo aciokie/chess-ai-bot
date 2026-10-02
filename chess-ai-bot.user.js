@@ -1413,13 +1413,16 @@ const getMoveWinPct = (cp, mate) => {
         // In module mode, WebAssembly.instantiate is intercepted so the loader's
         // bytes-based instantiate call compiles NOTHING — it instantiates the
         // cached module directly (skips the entire 4-5s compile).
-        // CRITICAL: fetch mock ONLY intercepts the exact wasmUrl passed at launch.
-        // Broad patterns (.wasm, stockfish, unpkg) BLOCK Chess.com sockets!
+        // CRITICAL: fetch mock intercepts fetches for the WASM filename (not exact URL).
+        // Stockfish JS constructs WASM URL from self.location.href (blob URL in worker),
+        // so exact URL matching fails. We match by filename instead.
+        // We still allow all other fetches through to real fetch (critical for Chess.com CSP).
         const moduleMode = !!compiledModule;
+        const wasmFilename = m.wasmUrl ? m.wasmUrl.split("/").pop() : null;
         const bootstrapCode = `
 var _wasmBytes = null;
 var _wasmModule = null;
-var _wasmUrl = null;
+var _wasmFilename = ${JSON.stringify(wasmFilename)};
 var _modulePosted = false;
 var _origInstantiate = WebAssembly.instantiate;
 WebAssembly.instantiate = function(bufferOrModule, imports) {
@@ -1455,8 +1458,9 @@ var _logFetch = function(u) { if (_probeCount++ < 20) self.postMessage("__probe:
 var _origFetch = self.fetch;
 self.fetch = function(url, opts) {
     _logFetch(url);
-    // ONLY intercept the EXACT wasmUrl passed at launch
-    if (_wasmUrl && String(url) === _wasmUrl) {
+    // Intercept fetch for the WASM filename (Stockfish JS requests this from blob URL)
+    var urlStr = String(url);
+    if (_wasmFilename && urlStr.endsWith(_wasmFilename)) {
         try {
             var resp = new Response(_wasmBytes, {
                 status: 200,
@@ -1487,11 +1491,9 @@ self.onmessage = function(e) {
             _wasmModule = d.wasmModule;
             _modulePosted = true;
             _wasmBytes = new Uint8Array(32);
-            _wasmUrl = d.wasmUrl || null;
             self.postMessage("__probe:module-mode");
         } else {
             _wasmBytes = new Uint8Array(d.wasmBytes);
-            _wasmUrl = d.wasmUrl || null;
             self.postMessage("__probe:bytes-received n=" + _wasmBytes.length);
         }
         self.onmessage = null;
