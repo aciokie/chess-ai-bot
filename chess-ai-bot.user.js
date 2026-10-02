@@ -1459,8 +1459,19 @@ var _origFetch = self.fetch;
 self.fetch = function(url, opts) {
     _logFetch(url);
     // Intercept fetch for the WASM filename (Stockfish JS requests this from blob URL)
+    // Handle blob URLs and malformed URLs by parsing pathname
     var urlStr = String(url);
-    if (_wasmFilename && urlStr.endsWith(_wasmFilename)) {
+    var shouldIntercept = false;
+    if (_wasmFilename) {
+        try {
+            var parsed = new URL(urlStr);
+            shouldIntercept = parsed.pathname.endsWith(_wasmFilename);
+        } catch (e) {
+            // Fallback: check if URL string contains the filename (handles malformed blob URLs)
+            shouldIntercept = urlStr.indexOf(_wasmFilename) !== -1;
+        }
+    }
+    if (shouldIntercept) {
         try {
             var resp = new Response(_wasmBytes, {
                 status: 200,
