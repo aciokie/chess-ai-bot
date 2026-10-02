@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 320px;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      background: #1e1e1e;
+      color: #eee;
+    }
+    .header {
+      background: #81b64c;
+      color: #000;
+      padding: 10px 12px;
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .version { font-size: 10px; opacity: 0.7; }
+    .section {
+      border-top: 1px solid #333;
+      padding: 12px;
+    }
+    .section:first-child { border-top: none; }
+    .section-title {
+      font-size: 10px;
+      color: #888;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      gap: 8px;
+    }
+    .row label { font-size: 12px; color: #ddd; opacity: 0.9; }
+    .row input[type="number"], .row select {
+      background: #2a2a2a;
+      color: #eee;
+      border: 1px solid #444;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      height: 28px;
+      min-width: 80px;
+    }
+    .row select { width: 100%; }
+    .row input[type="checkbox"] {
+      width: 16px; height: 16px;
+      accent-color: #81b64c;
+      cursor: pointer;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 4px;
+      margin-bottom: 8px;
+    }
+    .status-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #555;
+    }
+    .status-dot.ready { background: #81b64c; }
+    .status-dot.loading { background: #ffaa00; animation: pulse 1s infinite; }
+    .status-dot.error { background: #ff4444; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .btn {
+      background: #81b64c;
+      border: none;
+      color: #000;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+      width: 100%;
+      transition: filter 0.15s;
+    }
+    .btn:hover { filter: brightness(1.15); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+    .btn.secondary { background: #444; color: #eee; }
+    .btn.danger { background: #c0392b; color: #fff; }
+    .range-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .range-row input[type="range"] { flex: 1; accent-color: #81b64c; }
+    .range-row span { width: 40px; text-align: right; font-size: 11px; color: #888; }
+    .engine-select { margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span>Chess AI Bot</span>
+    <span class="version">v11.6.1</span>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Engine Status</div>
+    <div class="status">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Checking...</span>
+    </div>
+    <div class="row engine-select">
+      <label>Model</label>
+      <select id="modelSelect">
+        <option value="sf18_05">Stockfish 18.0.5 (WASM)</option>
+      </select>
+    </div>
+    <button class="btn" id="btnRestart" disabled>Restart Engine</button>
+    <button class="btn secondary" id="btnReinstall">Reinstall / Clear Cache</button>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Main Controls</div>
+    <div class="row">
+      <label>Auto-Analyze</label>
+      <input type="checkbox" id="chkAutoRun" checked>
+    </div>
+    <div class="row">
+      <label>Auto-Move</label>
+      <input type="checkbox" id="chkAutoMove">
+    </div>
+    <div class="row">
+      <label>Auto-Queue</label>
+      <input type="checkbox" id="chkAutoQueue">
+    </div>
+    <div class="row">
+      <label>Show Eval Bar</label>
+      <input type="checkbox" id="chkEvalBar" checked>
+    </div>
+    <div class="row">
+      <label>Move Highlights</label>
+      <input type="checkbox" id="chkHighlights" checked>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Engine Settings</div>
+    <div class="row">
+      <label>Depth <span id="maxDepthLabel">(max 25)</span></label>
+      <input type="number" id="inpDepth" min="1" max="25" value="18">
+    </div>
+    <div class="row range-row">
+      <label>Min Delay</label>
+      <input type="range" id="inpMinDelay" min="0" max="5000" step="100" value="0">
+      <span id="minDelayVal">0ms</span>
+    </div>
+    <div class="row range-row">
+      <label>Max Delay</label>
+      <input type="range" id="inpMaxDelay" min="0" max="10000" step="100" value="0">
+      <span id="maxDelayVal">0ms</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Features</div>
+    <div class="row">
+      <label>Threat Detection</label>
+      <input type="checkbox" id="chkThreat" checked>
+    </div>
+    <div class="row">
+      <label>Opening Book</label>
+      <input type="checkbox" id="chkOpeningBook" checked>
+    </div>
+    <div class="row">
+      <label>Time Management</label>
+      <input type="checkbox" id="chkTimeMgmt" checked>
+    </div>
+    <div class="row">
+      <label>Humanizer</label>
+      <input type="checkbox" id="chkHumanizer">
+    </div>
+    <div class="row" id="humanizeRateRow" style="display:none;">
+      <label>Humanize Rate %</label>
+      <input type="number" id="inpHumanizeRate" min="5" max="80" value="15" style="width:60px;">
+    </div>
+    <div class="row">
+      <label>Bullet Mode</label>
+      <input type="checkbox" id="chkBullet">
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Visuals</div>
+    <div class="row">
+      <label>Visual Type</label>
+      <select id="visType">
+        <option value="boxes">Boxes</option>
+        <option value="arrow">Arrow</option>
+        <option value="outline" selected>Outline</option>
+        <option value="nativeArrow">Chess.com Arrow</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Highlight Color</label>
+      <input type="color" id="inpColor" value="#00eeff" style="width:40px;height:28px;padding:0;border:none;border-radius:4px;cursor:pointer;">
+    </div>
+  </div>
+
+  <div class="section">
+    <button class="btn" id="btnAnalyze">▶ Analyze Now</button>
+    <button class="btn danger" id="btnStop">⏹ Stop</button>
+    <button class="btn secondary" id="btnReset">Reset to Defaults</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
