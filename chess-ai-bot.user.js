@@ -1402,7 +1402,7 @@ const getMoveWinPct = (cp, mate) => {
     const MODULE_CACHE_VERSION = 1;
 
     // Build a Worker from a patched JS blob (for WASM-based engines)
-    function buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule) {
+    function buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule, wasmUrl) {
         // Bootstrapped worker + zero-copy transfer (replaces the base64 blob).
         // Main thread sends {__type:"launch", jsCode, wasmBytes} with the wasm
         // ArrayBuffer TRANSFERRED (no copy), or {__type:"launch-module"} with a
@@ -1418,7 +1418,7 @@ const getMoveWinPct = (cp, mate) => {
         // so exact URL matching fails. We match by filename instead.
         // We still allow all other fetches through to real fetch (critical for Chess.com CSP).
         const moduleMode = !!compiledModule;
-        const wasmFilename = m.wasmUrl ? m.wasmUrl.split("/").pop() : null;
+        const wasmFilename = wasmUrl ? wasmUrl.split("/").pop() : null;
         const bootstrapCode = `
 var _wasmBytes = null;
 var _wasmModule = null;
@@ -1879,7 +1879,7 @@ self.onmessage = function(e) {
                             console.log(`[SF Engine] Caching patched worker data...`);
                             writeCacheAsync(db, patchedKey, { jsCode, wasmBytes }).catch(() => {});
                         }
-                        state.localEngine = buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule);
+                        state.localEngine = buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule, m.wasmUrl);
                         state.localEngine.onerror = onEngineWorkerError;
                         state.localEngine.onmessage = handleLocalMessage;
                         console.log(`[SF Engine] WASM worker created, finalizing...`);
