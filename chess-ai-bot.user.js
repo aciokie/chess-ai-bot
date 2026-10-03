@@ -1509,7 +1509,10 @@ self.onmessage = function(e) {
         }
         self.onmessage = null;
         try {
-            var F = new Function(d.jsCode);
+            // Emscripten JS in Stockfish 19 uses a table ie[e] for callback functions (e.g. key 1223796 / 98641076 calls onDoneSearching).
+            // Patch "ie[e].apply(null,fe)" in JS code to safe lookup "(ie[e]||function(){}).apply(null,fe)" so missing or unhandled callbacks do not throw Uncaught TypeError.
+            var patchedJsCode = d.jsCode.replace("ie[e].apply(null,fe)", "(ie[e]||function(){}).apply(null,fe)");
+            var F = new Function(patchedJsCode);
             F();
         } catch (err) {
             self.postMessage("__probe:loader-error " + (err && err.message || err));
