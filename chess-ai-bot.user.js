@@ -1423,6 +1423,7 @@ const getMoveWinPct = (cp, mate) => {
 var _wasmBytes = null;
 var _wasmModule = null;
 var _wasmFilename = ${JSON.stringify(wasmFilename)};
+var _wasmFetched = false;
 var _modulePosted = false;
 var _origInstantiate = WebAssembly.instantiate;
 WebAssembly.instantiate = function(bufferOrModule, imports) {
@@ -1462,14 +1463,13 @@ self.fetch = function(url, opts) {
     // Handle blob URLs and malformed URLs by parsing pathname
     var urlStr = String(url);
     var shouldIntercept = false;
-    if (_wasmFilename) {
-        try {
-            var parsed = new URL(urlStr);
-            shouldIntercept = parsed.pathname.endsWith(_wasmFilename);
-        } catch (e) {
-            // Fallback: check if URL string contains the filename (handles malformed blob URLs)
-            shouldIntercept = urlStr.indexOf(_wasmFilename) !== -1;
-        }
+    if (_wasmBytes && !_wasmFetched) {
+        // Stockfish worker only makes a single fetch call during startup to load its WASM binary.
+        // In browser environments (e.g. Chess.com), Stockfish JS resolves relative WASM URLs against
+        // the worker location (blob URL or concatenated origin), generating URLs like "https://www.chess.comhttps://www.chess.com/<uuid>".
+        // Therefore, any fetch request issued by the worker script while _wasmBytes is unconsumed is the engine binary request.
+        shouldIntercept = true;
+        _wasmFetched = true;
     }
     if (shouldIntercept) {
         try {
