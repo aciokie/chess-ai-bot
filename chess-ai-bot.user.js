@@ -1509,7 +1509,11 @@ self.onmessage = function(e) {
         }
         self.onmessage = null;
         try {
-            var F = new Function(d.jsCode);
+            self.Module = self.Module || {};
+            self.Module.onDoneSearching = self.Module.onDoneSearching || function(){};
+            var code = d.jsCode || "";
+            code = code.replace(/ie\[e\]\.apply\(null\s*,\s*fe\)/g, "(ie[e]||function(){}).apply(null,fe)");
+            var F = new Function(code);
             F();
         } catch (err) {
             self.postMessage("__probe:loader-error " + (err && err.message || err));
@@ -1895,7 +1899,7 @@ self.onmessage = function(e) {
                 // Fetch both JS and WASM in parallel, cache each independently
                 const fetchJs = (resolve, reject) => {
                     const bundled = GM_getResourceText("stockfish.js");
-                    if (bundled) {
+                    if (bundled && m.id === "sf19_00") {
                         console.log(`[SF Engine] Using bundled stockfish.js resource (${bundled.length} chars)`);
                         resolve(bundled); return;
                     }
