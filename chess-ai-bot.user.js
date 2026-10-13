@@ -88,27 +88,6 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
     // each model remembers its own last-used values independently.
     const LOCAL_ENGINES = [
         {
-            id:      "sf19_00",
-            cacheKey: "sf19_00",
-            label:   "Stockfish 19.0.0",
-            cdn:     "unpkg",
-            format:  "wasm",
-            jsUrl:   "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.js",
-            wasmUrl: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.wasm",
-            maxDepth:        25,
-            hasHash:         true,
-            hasMoveOverhead: true,   // SF 9+
-            hasSlowMover:    false,  // removed in SF 17
-            hasSkillLevel:   true,
-            hasNNUE:         true,   // UCI_LimitStrength + UCI_Elo
-            hasWDL:          true,   // UCI_ShowWDL
-            hasContempt:     true,   // SF 14+ has Contempt
-            hasMinThink:     false,  // removed in SF 12
-            hasRepetition:   true,   // SF 14+ anti-repetition
-            defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
-                        limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
-        },
-        {
             id:      "sf19_small",
             cacheKey: "sf19_small",
             label:   "Stockfish 19.0.0 (Small/Lite)",
@@ -123,10 +102,31 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasSkillLevel:   true,
             hasNNUE:         true,
             hasWDL:          true,
-            hasContempt:     true,
+            hasContempt:     false,  // removed in SF 14
             hasMinThink:     false,
             hasRepetition:   true,
             defaults: { hashMB: 32, moveOverhead: 100, skillLevel: 20,
+                        limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
+        },
+        {
+            id:      "sf19_00",
+            cacheKey: "sf19_00",
+            label:   "Stockfish 19.0.0",
+            cdn:     "unpkg",
+            format:  "wasm",
+            jsUrl:   "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.js",
+            wasmUrl: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.wasm",
+            maxDepth:        25,
+            hasHash:         true,
+            hasMoveOverhead: true,   // SF 9+
+            hasSlowMover:    false,  // removed in SF 17
+            hasSkillLevel:   true,
+            hasNNUE:         true,   // UCI_LimitStrength + UCI_Elo
+            hasWDL:          true,   // UCI_ShowWDL
+            hasContempt:     false,  // removed in SF 14
+            hasMinThink:     false,  // removed in SF 12
+            hasRepetition:   true,   // SF 14+ anti-repetition
+            defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
                         limitStrength: false, elo: 3190, showWDL: false, minThinkTime: 20 },
         },
         {
@@ -145,7 +145,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasSkillLevel:   true,
             hasNNUE:         true,   // UCI_LimitStrength + UCI_Elo
             hasWDL:          true,   // UCI_ShowWDL
-            hasContempt:     true,   // SF 14+ has Contempt (default 24, range -100..100)
+            hasContempt:     false,  // removed in SF 14
             hasMinThink:     false,  // removed in SF 12
             hasRepetition:   true,   // SF 14+ anti-repetition
             // Per-model defaults
@@ -167,7 +167,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             hasSkillLevel:   true,
             hasNNUE:         true,
             hasWDL:          true,
-            hasContempt:     true,   // SF 14+ has Contempt
+            hasContempt:     false,  // removed in SF 14
             hasMinThink:     false,  // removed in SF 12
             hasRepetition:   true,   // SF 14+ anti-repetition
             defaults: { hashMB: 64, moveOverhead: 100, skillLevel: 20,
@@ -340,7 +340,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         menuOpacity: 0.9,
         debugLogs: !1,
         menuPosition: "top-right",
-        localModelId: "sf18_05",
+        localModelId: "sf19_small",
         // Per-model settings are stored under "m_<modelId>_<key>" via GM_setValue.
         // These flat keys are only used as in-memory working copies (loaded on model select).
         localHashMB: 64,
@@ -419,7 +419,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
 
     // Save a per-model setting for the given (or current) model
     function saveModelSetting(key, val, modelId) {
-        const mid = modelId || settings.localModelId || "sf19_00";
+        const mid = modelId || settings.localModelId || "sf19_small";
         settings[key] = val;
         GM_setValue(`m_${mid}_${key}`, val);
     }
@@ -463,7 +463,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         });
         settings.engineMode = "local";
         // Load per-model settings for the active model
-        loadModelSettings(settings.localModelId || "sf19_00");
+        loadModelSettings(settings.localModelId || "sf19_small");
     }
     // --- UTILITIES ---
     const getRandomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
@@ -1643,7 +1643,7 @@ self.onmessage = function(e) {
         const fullError = `[${errorType}] ${msg} at ${filename}:${lineno}:${colno}. Suggestion: ${suggestion}`;
         console.error(`[SF Engine] Worker error: ${fullError}`);
         console.error(`[SF Engine] Stack: ${stack}`);
-        const currentModel = getEngineById(settings.localModelId || "sf19_00");
+        const currentModel = getEngineById(settings.localModelId || "sf19_small");
         console.error(`[SF Engine] Context: engineStatus=${state.engineStatus}, model=${currentModel.label}, hasCache=${!!state.localEngine}`);
 
         handleError(`Engine Worker Error (${errorType})`, e);
@@ -1775,7 +1775,7 @@ self.onmessage = function(e) {
         console.log(`[SF Engine] loadLocalEngine START`);
         state.engineLoadingInProgress = true;
         state.isThinking = false;
-        const modelId = settings.localModelId || "sf19_00";
+        const modelId = settings.localModelId || "sf19_small";
         const m = getEngineById(modelId);
         const label = m.format === "asmjs" ? `${m.label} (asm.js)` : m.label;
         console.log(`[SF Engine] Loading model: ${label} (id=${modelId}, format=${m.format})`);
@@ -2373,7 +2373,6 @@ self.onmessage = function(e) {
         console.log(`[SF Engine] → ${goCmd}`);
         state.currentSearchFEN = fen;
         state.localEngine.postMessage("stop");
-        state.localEngine.postMessage("ucinewgame");
         state.localEngine.postMessage(`position fen ${fen}`);
         state.localEngine.postMessage(goCmd);
         // A dispatch that interrupts a running search makes the old search's
@@ -2446,7 +2445,7 @@ self.onmessage = function(e) {
             state.pendingReadyProbe = false;
             state.engineRetryAt = 0;
             if (state.engineStatus !== "ready") {
-                const m = getEngineById(settings.localModelId || "sf19_00");
+                const m = getEngineById(settings.localModelId || "sf19_small");
                 setEngineStatus("ready", "");
                 state.lastMoveResult = `✅ ${m.label} ready.`;
                 updateUI();
@@ -3089,7 +3088,7 @@ function triggerAutoMove(fen = null) {
         const btnUninstall = document.getElementById("btnLocalUninstall");
         if (!statusEl) return;
 
-        const m = getEngineById(settings.localModelId || "sf19_00");
+        const m = getEngineById(settings.localModelId || "sf19_small");
 
         // ── Status badge ──
         const statusMap = {
@@ -4598,7 +4597,7 @@ pvSettings: document.getElementById("pvSettings"),
         document.body.classList.add(`mode-${settings.engineMode}`);
         if (state.ui.debugArea) state.ui.debugArea.style.display = settings.debugLogs ? "flex" : "none";
         let maxD = 18;
-        if (settings.engineMode === "local") maxD = getEngineById(settings.localModelId || "sf19_00").maxDepth;
+        if (settings.engineMode === "local") maxD = getEngineById(settings.localModelId || "sf19_small").maxDepth;
         else if (settings.engineMode === "sfonline") maxD = 15;
         if (state.ui.lblMaxDepth) state.ui.lblMaxDepth.innerText = maxD;
         if (state.ui.inpDepth) state.ui.inpDepth.max = maxD;
@@ -4628,6 +4627,7 @@ pvSettings: document.getElementById("pvSettings"),
     // Clear any per-position analysis state left over from the previous game so a stale
     // best-move / humanAlternatives / mate can't leak into a brand-new game.
     function resetTransientStateForNewGame() {
+        if (state.localEngine) state.localEngine.postMessage("ucinewgame");
         if (state.isThinking) state.pendingAbortEchoes = (state.pendingAbortEchoes || 0) + 1;
         state.isThinking = false;
         if (state.analysisWatchdog) { clearTimeout(state.analysisWatchdog); state.analysisWatchdog = null; }
