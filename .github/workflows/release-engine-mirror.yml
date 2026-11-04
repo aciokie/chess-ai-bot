@@ -1,0 +1,77 @@
+name: Publish engine mirror (GitHub Releases)
+
+# Republishes the exact engine files that chess-ai-bot.user.js downloads from
+# public CDNs (unpkg / cdnjs) as release assets. The userscript lists these as
+# a last-resort download source, so a CDN block/outage never bricks the engine
+# (see the `sources` arrays in LOCAL_ENGINES).
+#
+# - On a v* tag: download -> verify SHA-256 -> create/update the GitHub Release.
+#   Asset names are stable; the userscript references them via
+#   https://github.com/aciokie/chess-ai-bot/releases/latest/download/<name>
+# - workflow_dispatch: download + verify only (no release), for testing.
+#
+# IMPORTANT: the SHA-256 values below are the same pins embedded in
+# chess-ai-bot.user.js. tests/mirror-workflow.test.js cross-checks both sides,
+# and tests/verify-engine-sources.js can re-verify against the live CDNs.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    name: Mirror engine files
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Download engine files from CDNs
+        run: |
+          set -euo pipefail
+          mkdir -p mirror
+          cd mirror
+          base="https://unpkg.com/stockfish"
+          get() { curl -fsSL --retry 3 --retry-delay 2 -o "$1" "$2"; echo "downloaded $1 ($(stat -c%s "$1") bytes)"; }
+          get stockfish-19-lite-single.js    "$base@19.0.0/bin/stockfish-19-lite-single.js"
+          get stockfish-19-lite-single.wasm  "$base@19.0.0/bin/stockfish-19-lite-single.wasm"
+          get stockfish-19-single.js         "$base@19.0.0/bin/stockfish-19-single.js"
+          get stockfish-19-single.wasm       "$base@19.0.0/bin/stockfish-19-single.wasm"
+          get stockfish-18-lite-single.js    "$base@18.0.5/bin/stockfish-18-lite-single.js"
+          get stockfish-18-lite-single.wasm  "$base@18.0.5/bin/stockfish-18-lite-single.wasm"
+          get stockfish-nnue-16-single.js    "$base@16.0.0/src/stockfish-nnue-16-single.js"
+          get stockfish-nnue-16-single.wasm  "$base@16.0.0/src/stockfish-nnue-16-single.wasm"
+          get stockfish-11.js                "$base@11.0.0/src/stockfish.js"
+          get stockfish-11.wasm              "$base@11.0.0/src/stockfish.wasm"
+          get stockfish-10.0.2.js            "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js"
+          get stockfish-9.0.0.js             "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/9.0.0/stockfish.js"
+
+      - name: Verify SHA-256
+        run: |
+          set -euo pipefail
+          cd mirror
+          check() { echo "$1  $2" | sha256sum -c -; }
+          check d3344124ab067fb0b90ee77873bb8e9fbf5fc01bc525fe714b0f942581e889e6 stockfish-19-lite-single.js
+          check 57ac2d72312aba346760e3f173f687a8c211208e97a87268436f7f0e10bb5387 stockfish-19-lite-single.wasm
+          check 72772f8bdd7353e4e24245d946bb831f56bcccf02fa16a779c1b92a6c00e5cc2 stockfish-19-single.js
+          check 8725c26572762617fd96b2ea83ff130e6640b85815890d682bf8c49db0820721 stockfish-19-single.wasm
+          check 2278005057f381491f1c9bb3e44c9f5920b3a00bef9759e33cc6582769a1f1fe stockfish-18-lite-single.js
+          check a8fbc05ec6920b56d7485826dcb02c5ffd2826bcbf751cf973046f237a9096f1 stockfish-18-lite-single.wasm
+          check e2958bb89fc6ee0faedde87284bbb7e14da2ab224f06ca1bd82e62eaca87d00b stockfish-nnue-16-single.js
+          check a7acf7f20cb81d755b39b3dd42a4bdfd6e8c8d3d203d9fbdc525e40e1f68df08 stockfish-nnue-16-single.wasm
+          check b203c697e523cc7b336c7ae3fe5057849a63c2c96f385a889512e21bc85d2003 stockfish-11.js
+          check e5f1deb483cc28bcf4dff5d3cb9abb9aee697c1fe174c60d1c5cc476da76cae8 stockfish-11.wasm
+          check 723fda70117bfa8d5053a7bc4ae50cdc96dc9e3fd41b57627e4dfa0a0025957a stockfish-10.0.2.js
+          check 39d33ac9daf84fc8a0c6952bd0ee7a94af79ab9db7dcebad1058cf994914d590 stockfish-9.0.0.js
+
+      - name: Create release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: mirror/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

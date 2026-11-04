@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.7.3
+// @version          11.7.4
 // @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -15,9 +15,11 @@
 // @match         https://www.chess.com/analysis/*
 // @match         https://www.chess.com/puzzles/*
 // @match         https://www.chess.com/daily
-// @connect       chess-api.com
-// @connect       stockfish.online
 // @connect       unpkg.com
+// @connect       cdn.jsdelivr.net
+// @connect       cdnjs.cloudflare.com
+// @connect       github.com
+// @connect       raw.githubusercontent.com
 // @connect       *
 // @grant         GM_getResourceText
 // @grant         GM_getValue
@@ -34,8 +36,7 @@
         BOARD_SEL: "chess-board, wc-chess-board",
         LOOP_MS: 50,
         BACKUP_POLL_MIN_MS: 2000,
-        BACKUP_POLL_MAX_MS: 5000,
-        API: { MAX_DEPTH: 18, MAX_TIME: 100 }
+        BACKUP_POLL_MAX_MS: 5000
     };
     const PIECE_IMGS = {
         p: "https://upload.wikimedia.org/wikipedia/commons/c/c7/Chess_pdt45.svg",
@@ -53,18 +54,32 @@
     };
     const STOCKFISH_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAAsTAAALEwEAmpwYAAAEGklEQVR4nO2ZW2gcVRjH/9+Z3ewm22xMNtVGU9RIxNqmFxF8sC0iFhF8UF980QcFL1jwaRELXnwQBC94UfBBEQtK0Yqi1LwgaL0k0DQm2zapm2az2d1kd2bO8f/M7Gw22U12052lB34wzMzO+Z/vO+d85ztnlkQIIYQQQgghhBBCSKtQSt1BCHmOEDKplLqD53n7x8fH9xBCfC2U0r2EkNcIIY/xPG9rIR4F8CGl9EEA+wghG5s9+yGl9F0A+9sKEEJ8B+A5AMcIIb6W/v8B4BCl9AkA+1oK8Ty/m1L6LID9hJCNzb7ZhRL6IoD9bQcopc8SQp4ghExt9mw/pfR5APtbcwH1C68W/l8B3wO463+xAOu5gH2EkG2EENSX8F4A+wkhG7mA+l3gVwD3tBCAUvoYIeQpQkh/s2f7KaVPAthfFw/4HsA+QsjGZt/sJ5Q+01oArvN9Qkh/s2f7KaWPE0L2112Au8D3AO4jhGxs9u0+SulTAPbXFfA9gP2EkI3NvttPKX0KwP66Ar4HsJ8QsrHZd/sppU8C2F9XwPcA9hNCNjb7bj+l9CkA++sK+B7AfYSQjc2+208pfQrA/rYClNI9hJCnCCHTmz3bTyl9CsD+tgOU0mcIIU8RQqY3e7afUvo0gP1tBSilz1BKnwGwv60A/H8uQAh5DsB+QsjGZt98Qil9DsD+1gKU0ucIIc8QQqY2e7afUvo8gP2tBaij0N8A7iOEbGz23X5K6fMA9tcV8D2A+wghG5t9t59S+iSA/XUFfA9gPyFkY7Pv9lNKTwLYX1fA9wDuI4RsbPbd/v8U4H/fA0II8Ty/mxDiA7C/Lh7wPID9hJCNzb7dTyl9EcD+ungA8Ty/mxDiA7C/pQCldC+l9EUA+1sK8Ty/hxDya0rpCwD2txTg/7kAIeR5APtbut8ghBBC2pZ/ALy683b5qZ2oAAAAAElFTkSuQmCC";
 
-    const DEFAULT_WASM_URL = "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-single.wasm";
 const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-installs";
 
-    // ─── Local Engine Registry ──
+    // ─── Local Engine Registry ────────────────────────────────────────────────
     // Each entry describes one loadable local engine variant.
     //
     // format:
-    //   "wasm-patched"  → SF 18/17/16/15/14/12 style: fetch JS via GM_getResourceText
-    //                     (or fall back to XHR if jsUrl is provided), fetch WASM via
-    //                     GM_xmlhttpRequest, patch self.fetch, build Worker from Blob.
-    //   "asmjs"         → SF 9/10 style: pure asm.js, load JS via XHR,
-    //                     create Worker directly — no WASM involved at all.
+    //   "wasm"  → JS + WASM fetched via GM_xmlhttpRequest (or the bundled
+    //             @resource text for sf19_00), self.fetch patched inside the
+    //             worker, Worker built from Blob. See buildWasmPatchedEngine.
+    //   "asmjs" → single stockfish.js from cdnjs, Worker from JS text only —
+    //             no WASM involved at all.
+    //
+    // sources:
+    //   Ordered list of download sources, tried until one succeeds. Every
+    //   source must serve a COMPLETE, mutually-compatible JS+WASM pair — the
+    //   loader never mixes a JS file from one build with a WASM file from
+    //   another. Sources are only consulted when the IndexedDB cache misses.
+    //   • label  — shown in logs, status text, and the Source URLs panel
+    //   • js     — loader JS URL
+    //   • wasm   — WASM bytes URL (omit for asm.js models)
+    //   • sha256 — pinned hash of the WASM file. A download whose hash does
+    //              not match is rejected and the next source is tried, so a
+    //              truncated/corrupted file can never reach the cache. The
+    //              "github" sources point at this repo's release mirror
+    //              (release-engine-mirror.yml) which republishes the exact
+    //              same bytes — same hash, no external CDN dependency.
     //
     // caps:
     //   maxDepth        → UI depth cap for this model
@@ -77,13 +92,6 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
     //   hasContempt     → Contempt option (removed in SF 14)
     //   hasMinThink     → Minimum Thinking Time option (SF 11 and older only)
     //
-    // ── Local Engine Registry ────────────────────────────────────────────────
-    // Only 5 confirmed-working models. Each has a complete caps map so every
-    // UCI option, UI row, and per-model saved setting is driven from here.
-    //
-    // format: "wasm"  → JS + WASM fetched via XHR, self.fetch patched, Worker Blob
-    //         "asmjs" → single stockfish.js from cdnjs, Worker from JS text only
-    //
     // Per-model settings are persisted under keys like "m_sf18_05_hashMB" so
     // each model remembers its own last-used values independently.
     const LOCAL_ENGINES = [
@@ -91,10 +99,11 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             id:      "sf19_small",
             cacheKey: "sf19_small",
             label:   "Stockfish 19.0.0 (Small/Lite)",
-            cdn:     "unpkg",
             format:  "wasm",
-            jsUrl:   "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-lite-single.js",
-            wasmUrl: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-lite-single.wasm",
+            sources: [
+                { label: "unpkg",      js: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-lite-single.js",            wasm: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-lite-single.wasm",            sha256: "57ac2d72312aba346760e3f173f687a8c211208e97a87268436f7f0e10bb5387" },
+                { label: "github",     js: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-19-lite-single.js", wasm: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-19-lite-single.wasm", sha256: "57ac2d72312aba346760e3f173f687a8c211208e97a87268436f7f0e10bb5387" },
+            ],
             maxDepth:        20,
             hasHash:         true,
             hasMoveOverhead: true,
@@ -112,10 +121,11 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             id:      "sf19_00",
             cacheKey: "sf19_00",
             label:   "Stockfish 19.0.0",
-            cdn:     "unpkg",
             format:  "wasm",
-            jsUrl:   "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.js",
-            wasmUrl: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.wasm",
+            sources: [
+                { label: "unpkg",      js: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.js",            wasm: "https://unpkg.com/stockfish@19.0.0/bin/stockfish-19-single.wasm",            sha256: "8725c26572762617fd96b2ea83ff130e6640b85815890d682bf8c49db0820721" },
+                { label: "github",     js: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-19-single.js", wasm: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-19-single.wasm", sha256: "8725c26572762617fd96b2ea83ff130e6640b85815890d682bf8c49db0820721" },
+            ],
             maxDepth:        25,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -133,10 +143,11 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             id:      "sf18_05",
             cacheKey: "sf18_05",
             label:   "Stockfish 18.0.5",
-            cdn:     "unpkg",
             format:  "wasm",
-            jsUrl:   "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-lite-single.js",
-            wasmUrl: "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-lite-single.wasm",
+            sources: [
+                { label: "unpkg",      js: "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-lite-single.js",            wasm: "https://unpkg.com/stockfish@18.0.5/bin/stockfish-18-lite-single.wasm",            sha256: "a8fbc05ec6920b56d7485826dcb02c5ffd2826bcbf751cf973046f237a9096f1" },
+                { label: "github",     js: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-18-lite-single.js", wasm: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-18-lite-single.wasm", sha256: "a8fbc05ec6920b56d7485826dcb02c5ffd2826bcbf751cf973046f237a9096f1" },
+            ],
             // Capabilities
             maxDepth:        25,
             hasHash:         true,
@@ -156,10 +167,12 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             id:      "sf16_00",
             cacheKey: "sf16_00",
             label:   "Stockfish 16.0",
-            cdn:     "unpkg",
             format:  "wasm",
-            jsUrl:   "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.js",
-            wasmUrl: "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",
+            sources: [
+                { label: "unpkg",      js: "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.js",            wasm: "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm",            sha256: "a7acf7f20cb81d755b39b3dd42a4bdfd6e8c8d3d203d9fbdc525e40e1f68df08" },
+                { label: "jsdelivr",   js: "https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.js", wasm: "https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm", sha256: "a7acf7f20cb81d755b39b3dd42a4bdfd6e8c8d3d203d9fbdc525e40e1f68df08" },
+                { label: "github",     js: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-nnue-16-single.js", wasm: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-nnue-16-single.wasm", sha256: "a7acf7f20cb81d755b39b3dd42a4bdfd6e8c8d3d203d9fbdc525e40e1f68df08" },
+            ],
             maxDepth:        25,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -177,10 +190,12 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             id:      "sf11_00",
             cacheKey: "sf11_00",
             label:   "Stockfish 11.0",
-            cdn:     "unpkg",
             format:  "wasm",
-            jsUrl:   "https://unpkg.com/stockfish@11.0.0/src/stockfish.js",
-            wasmUrl: "https://unpkg.com/stockfish@11.0.0/src/stockfish.wasm",
+            sources: [
+                { label: "unpkg",      js: "https://unpkg.com/stockfish@11.0.0/src/stockfish.js",            wasm: "https://unpkg.com/stockfish@11.0.0/src/stockfish.wasm",            sha256: "e5f1deb483cc28bcf4dff5d3cb9abb9aee697c1fe174c60d1c5cc476da76cae8" },
+                { label: "jsdelivr",   js: "https://cdn.jsdelivr.net/npm/stockfish@11.0.0/src/stockfish.js", wasm: "https://cdn.jsdelivr.net/npm/stockfish@11.0.0/src/stockfish.wasm", sha256: "e5f1deb483cc28bcf4dff5d3cb9abb9aee697c1fe174c60d1c5cc476da76cae8" },
+                { label: "github",     js: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-11.js", wasm: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-11.wasm", sha256: "e5f1deb483cc28bcf4dff5d3cb9abb9aee697c1fe174c60d1c5cc476da76cae8" },
+            ],
             maxDepth:        20,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -198,10 +213,12 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             id:      "sf10_02",
             cacheKey: "sf10_02",
             label:   "Stockfish 10.0.2 — asm.js",
-            cdn:     "cdnjs",
             format:  "asmjs",
-            jsUrl:   "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js",
-            wasmUrl: null,
+            sources: [
+                { label: "cdnjs",  js: "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js" },
+                { label: "github", js: "https://raw.githubusercontent.com/cdnjs/cdnjs/master/ajax/libs/stockfish.js/10.0.2/stockfish.js" },
+                { label: "mirror", js: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-10.0.2.js" },
+            ],
             maxDepth:        20,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -219,10 +236,12 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
             id:      "sf9_00",
             cacheKey: "sf9_00",
             label:   "Stockfish 9.0.0 — asm.js",
-            cdn:     "cdnjs",
             format:  "asmjs",
-            jsUrl:   "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/9.0.0/stockfish.js",
-            wasmUrl: null,
+            sources: [
+                { label: "cdnjs",  js: "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/9.0.0/stockfish.js" },
+                { label: "github", js: "https://raw.githubusercontent.com/cdnjs/cdnjs/master/ajax/libs/stockfish.js/9.0.0/stockfish.js" },
+                { label: "mirror", js: "https://github.com/aciokie/chess-ai-bot/releases/latest/download/stockfish-9.0.0.js" },
+            ],
             maxDepth:        18,
             hasHash:         true,
             hasMoveOverhead: true,   // SF 9+
@@ -261,7 +280,6 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         engineLoadWatchdog: null,
         engineStatus: "not_installed",
         engineStatusMsg: "",
-        currentCloudRequest: null,
         currentBestMove: null,
         humanAlternatives: [],
         multiPVMap: null,
@@ -293,6 +311,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         engineModuleKey: null,
         engineDB: null,
         engineModuleCacheBroken: false,
+        engineHealMap: {},
         gameOverPollTimeout: null,
         boardObserver: null,
         analysisPauseUntil: 0,
@@ -304,8 +323,6 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
     const DEFAULT_SETTINGS = {
         engineMode: "local",
         depth: 18,
-        maxThinkingTime: 0,
-        searchMoves: "",
         autoRun: !0,
         autoMove: !0,
         autoQueue: !1,
@@ -1512,7 +1529,7 @@ self.onmessage = function(e) {
             self.Module = self.Module || {};
             self.Module.onDoneSearching = self.Module.onDoneSearching || function(){};
             var code = d.jsCode || "";
-            code = code.replace(/ie\[e\]\.apply\(null\s*,\s*fe\)/g, "(ie[e]||function(){}).apply(null,fe)");
+            code = code.replace(/ie\\[e\\]\\.apply\\(null\\s*,\\s*fe\\)/g, "(ie[e]||function(){}).apply(null,fe)");
             var F = new Function(code);
             F();
         } catch (err) {
@@ -1626,9 +1643,9 @@ self.onmessage = function(e) {
         } else if (msg.includes("Failed to fetch") || msg.includes("fetch")) {
             errorType = "Fetch/WASM Load Failed";
             suggestion = "Fetch mock not returning valid Response. Check arrayBuffer()/blob()/headers implementation.";
-        } else if (msg.includes("CompileError") || msg.includes("WebAssembly")) {
+        } else if (msg.includes("CompileError") || msg.includes("WebAssembly") || msg.includes("LinkError")) {
             errorType = "WASM Compile Error";
-            suggestion = "WASM bytes corrupted or invalid. Clear cache (Reinstall) and re-download.";
+            suggestion = "WASM bytes corrupted/invalid or mismatched build. Auto-heal clears the cache once; use Reinstall if it persists.";
         } else if (msg.includes("ReferenceError") || msg.includes("not defined")) {
             errorType = "JS Reference Error";
             suggestion = "Variable missing in patch code. Check _wasmBytes, _origFetch defined before use.";
@@ -1646,6 +1663,34 @@ self.onmessage = function(e) {
         const currentModel = getEngineById(settings.localModelId || "sf19_small");
         console.error(`[SF Engine] Context: engineStatus=${state.engineStatus}, model=${currentModel.label}, hasCache=${!!state.localEngine}`);
 
+        // ── Self-healing for corrupted cached engine files ──
+        // A WASM Compile/Link error almost always means the cached bytes are
+        // corrupt (e.g. a truncated download) or the cached JS/WASM pair is
+        // from mismatched builds. Purge this model's cache and re-download
+        // ONCE. If the purged reload fails again we fall through to the normal
+        // error path — and skip the auto-restart below so we don't hot-loop.
+        const healableError = errorType === "WASM Compile Error";
+        const healAttempted = !!(state.engineHealMap && state.engineHealMap[currentModel.id]);
+        if (healableError && !healAttempted) {
+            state.engineHealMap[currentModel.id] = true;
+            console.warn(`[SF Engine] Auto-heal: cache looks corrupted for ${currentModel.label} — purging cached files and re-downloading (one retry)...`);
+            setEngineStatus("loading", "Cache corrupted — re-downloading engine...");
+            state.localEngine = null;
+            state.engineLoadingInProgress = false;
+            state.isThinking = false;
+            state.pendingLocalFEN = null;
+            state.pendingLocalDepth = null;
+            state.pendingMoveDelay = 0;
+            state.pendingAbortEchoes = 0;
+            state.engineRetryAt = 0;
+            updateUI();
+            purgeModelCache(currentModel.id, () => {
+                state.engineLoadGeneration++;
+                loadLocalEngine();
+            });
+            return;
+        }
+
         handleError(`Engine Worker Error (${errorType})`, e);
         setEngineStatus("error", `${errorType}: ${msg}`);
         state.localEngine = null;
@@ -1657,9 +1702,12 @@ self.onmessage = function(e) {
         state.pendingMoveDelay = 0;
         state.pendingAbortEchoes = 0;
         
-        // Auto-restart engine after crash (especially after mate sequence)
+        // Auto-restart engine after crash (especially after mate sequence).
+        // Skipped when a cache-corruption heal was already attempted: the
+        // cached bytes are known-bad, so a hot restart would just re-crash.
+        const skipAutoRestart = healableError && healAttempted;
         setTimeout(() => {
-            if (!state.localEngine && state.engineStatus === "error") {
+            if (!state.localEngine && state.engineStatus === "error" && !skipAutoRestart) {
                 console.log(`[SF Engine] Auto-restarting engine after crash...`);
                 state.engineRetryAt = 0;
                 loadLocalEngine();
@@ -1733,10 +1781,53 @@ self.onmessage = function(e) {
         } catch (e) { cb && cb(); }
     }
 
+    // Delete every cached artifact for one model (JS text, WASM bytes, patched
+    // worker payload, compiled module + legacy key). Shared by Reinstall,
+    // Uninstall, and the automatic cache self-heal on WASM compile errors.
+    function purgeModelCache(modelId, cb) {
+        const m = getEngineById(modelId);
+        openCache((dbErr, db) => {
+            if (!db) { cb && cb(); return; }
+            const patchedKey = m.cacheKey + "_patched";
+            deleteCache(db, m.cacheKey + "_js", () =>
+                deleteCache(db, m.cacheKey + "_wasm", () =>
+                    deleteCache(db, patchedKey, () =>
+                        deleteCache(db, patchedKey + "_module", () =>
+                            deleteCache(db, m.cacheKey, () => cb && cb()) // legacy key
+                        )
+                    )
+                )
+            );
+        });
+    }
+
     // ─── Download helpers ─────────────────────────────────────────────────────
-    function xhrText(url, cb, errCb) {
+    const JS_TIMEOUT_MS   = 30000;    // loader JS is small (~10-100KB)
+    const WASM_TIMEOUT_MS = 300000;   // WASM can be ~100MB on slow connections
+
+    // GM_xmlhttpRequest exposes headers as a raw string ("Name: value\r\n…");
+    // pull one value out. Returns null when the header is absent.
+    function headerValue(headers, name) {
+        if (!headers) return null;
+        const m = String(headers).match(new RegExp("^\\s*" + name + "\\s*:\\s*(\\S+)", "mi"));
+        return m ? m[1] : null;
+    }
+
+    // SHA-256 of a byte array as lowercase hex, or null when unavailable
+    // (crypto.subtle only exists in secure contexts — chess.com is https).
+    function sha256Hex(bytes) {
+        try {
+            if (!(window.crypto && window.crypto.subtle && window.crypto.subtle.digest)) return Promise.resolve(null);
+            return window.crypto.subtle.digest("SHA-256", bytes).then(
+                (buf) => Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join(""),
+                () => null
+            );
+        } catch (e) { return Promise.resolve(null); }
+    }
+
+    function xhrText(url, cb, errCb, timeoutMs = JS_TIMEOUT_MS) {
         GM_xmlhttpRequest({
-            method: "GET", url, timeout: 30000,
+            method: "GET", url, timeout: timeoutMs,
             onload: (r) => {
                 if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
                 cb(r.responseText);
@@ -1746,12 +1837,29 @@ self.onmessage = function(e) {
         });
     }
 
-    function xhrBinary(url, cb, errCb) {
+    // Binary download with truncation + (optional) SHA-256 integrity checks, so
+    // a corrupted file can never reach the cache. Truncation is detected via
+    // Content-Length, integrity via the source's pinned sha256.
+    function xhrBinary(url, cb, errCb, opts = {}) {
+        const timeoutMs = opts.timeoutMs || JS_TIMEOUT_MS;
         GM_xmlhttpRequest({
-            method: "GET", url, responseType: "arraybuffer", timeout: 30000,
+            method: "GET", url, responseType: "arraybuffer", timeout: timeoutMs,
             onload: (r) => {
                 if (r.status >= 400) { errCb(new Error(`HTTP ${r.status}`)); return; }
-                cb(new Uint8Array(r.response));
+                const bytes = new Uint8Array(r.response);
+                const expectedLen = headerValue(r.responseHeaders, "content-length");
+                if (expectedLen !== null && parseInt(expectedLen, 10) !== bytes.length) {
+                    errCb(new Error(`Truncated download: received ${bytes.length} bytes but Content-Length says ${expectedLen}`));
+                    return;
+                }
+                if (!opts.sha256) { cb(bytes); return; }
+                sha256Hex(bytes).then((hex) => {
+                    if (hex && hex.toLowerCase() !== String(opts.sha256).toLowerCase()) {
+                        errCb(new Error(`Integrity check failed (SHA-256 mismatch) for ${url}`));
+                        return;
+                    }
+                    cb(bytes);
+                });
             },
             onerror: (e) => errCb(new Error("Binary download failed: " + url)),
             ontimeout: () => errCb(new Error("Binary timeout: " + url)),
@@ -1779,7 +1887,7 @@ self.onmessage = function(e) {
         const m = getEngineById(modelId);
         const label = m.format === "asmjs" ? `${m.label} (asm.js)` : m.label;
         console.log(`[SF Engine] Loading model: ${label} (id=${modelId}, format=${m.format})`);
-        console.debug(`[SF Engine] Model URLs: jsUrl=${m.jsUrl}, wasmUrl=${m.wasmUrl}`);
+        console.debug(`[SF Engine] Model sources: ${(m.sources || []).map(s => s.label).join(" → ") || "legacy"}`);
         setEngineStatus("loading", "Checking cache...");
         state.lastMoveResult = `⏳ Loading ${label}...`;
         updateUI();
@@ -1828,7 +1936,26 @@ self.onmessage = function(e) {
                         setEngineStatus("error", e.message || "Build failed");
                     }
                 };
-                if (db) {
+                const asmSources = (m.sources && m.sources.length)
+                    ? m.sources
+                    : [{ label: m.cdn || "cdn", js: m.jsUrl }]; // legacy shape
+                const tryAsmSource = (idx) => {
+                    if (!isCurrentLoad()) return;
+                    if (idx >= asmSources.length) {
+                        const tried = asmSources.map(s => s.label).join(" → ");
+                        const err = `All download sources failed (${tried}). Check network connectivity.`;
+                        console.error(`[SF Engine] ${err}`);
+                        state.engineLoadingInProgress = false;
+                        setEngineStatus("error", err);
+                        return;
+                    }
+                    const source = asmSources[idx];
+                    const onFail = (e) => {
+                        if (!isCurrentLoad()) return;
+                        console.warn(`[SF Engine] Source ${source.label} failed: ${e.message || e}`);
+                        tryAsmSource(idx + 1);
+                    };
+                    if (db) {
                         readCache(db, m.cacheKey, (_, cached) => {
                             if (!isCurrentLoad()) return;
                             if (cached) {
@@ -1836,30 +1963,20 @@ self.onmessage = function(e) {
                                 setEngineStatus("loading", "Loading from cache...");
                                 launch(cached);
                             } else {
-                                console.log(`[SF Engine] No cache, downloading JS from ${m.jsUrl}...`);
+                                console.log(`[SF Engine] No cache, downloading JS from ${source.label}...`);
                                 setEngineStatus("loading", "Downloading JS...");
-                                xhrText(m.jsUrl,
+                                xhrText(source.js,
                                     (js) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] JS downloaded (${js.length} chars), caching...`); if (db) writeCache(db, m.cacheKey, js); launch(js); },
-                                    (e)  => {
-                                        if (!isCurrentLoad()) return;
-                                        const err = `JS download failed: ${e.message || e}. URL: ${m.jsUrl}. Check: 1) Network connectivity 2) unpkg.com accessible 3) GM_xmlhttpRequest allowed`;
-                                        console.error(`[SF Engine] ${err}`);
-                                        state.engineLoadingInProgress = false;
-                                        setEngineStatus("error", err);
-                                    }
+                                    onFail
                                 );
                             }
                         });
                     } else {
-                        console.log(`[SF Engine] No IndexedDB, downloading JS directly...`);
-                        xhrText(m.jsUrl, launch, (e) => {
-                            if (!isCurrentLoad()) return;
-                            const err = `JS download failed (no DB): ${e.message || e}. URL: ${m.jsUrl}. Check network.`;
-                            console.error(`[SF Engine] ${err}`);
-                            state.engineLoadingInProgress = false;
-                            setEngineStatus("error", err);
-                        });
+                        console.log(`[SF Engine] No IndexedDB, downloading JS directly from ${source.label}...`);
+                        xhrText(source.js, launch, onFail);
                     }
+                };
+                tryAsmSource(0);
 
             } else {
                 // ── wasm format: cache BOTH js text and wasm bytes in IndexedDB ──
@@ -1883,7 +2000,7 @@ self.onmessage = function(e) {
                             console.log(`[SF Engine] Caching patched worker data...`);
                             writeCacheAsync(db, patchedKey, { jsCode, wasmBytes }).catch(() => {});
                         }
-                        state.localEngine = buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule, m.wasmUrl);
+                        state.localEngine = buildWasmPatchedEngine(jsCode, wasmBytes, compiledModule, (m.sources && m.sources[0] && m.sources[0].wasm) || null);
                         state.localEngine.onerror = onEngineWorkerError;
                         state.localEngine.onmessage = handleLocalMessage;
                         console.log(`[SF Engine] WASM worker created, finalizing...`);
@@ -1896,8 +2013,17 @@ self.onmessage = function(e) {
                     }
                 };
 
-                // Fetch both JS and WASM in parallel, cache each independently
-                const fetchJs = (resolve, reject) => {
+                // ── Download sources ─────────────────────────────────────────
+                // Ordered list from the registry; each source must provide a
+                // complete, compatible JS+WASM pair. IndexedDB cache wins over
+                // the network — an already-cached model never touches the CDN.
+                const sources = (m.sources && m.sources.length)
+                    ? m.sources
+                    : [{ label: m.cdn || "cdn", js: m.jsUrl, wasm: m.wasmUrl, sha256: null }]; // legacy shape
+
+                // Loader JS for one source: bundled @resource (sf19_00) →
+                // IndexedDB cache → network.
+                const fetchJsFrom = (source, resolve, reject) => {
                     const bundled = GM_getResourceText("stockfish.js");
                     if (bundled && m.id === "sf19_00") {
                         console.log(`[SF Engine] Using bundled stockfish.js resource (${bundled.length} chars)`);
@@ -1910,32 +2036,20 @@ self.onmessage = function(e) {
                                 console.log(`[SF Engine] Found cached JS in IndexedDB (${cachedJs.length} chars)`);
                                 resolve(cachedJs);
                             } else {
-                                console.log(`[SF Engine] No cached JS, downloading from ${m.jsUrl}...`);
-                                xhrText(m.jsUrl, (js) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] JS downloaded (${js.length} chars), caching...`); writeCacheAsync(db, jsKey, js); resolve(js); }, reject);
+                                console.log(`[SF Engine] No cached JS, downloading from ${source.label}...`);
+                                xhrText(source.js, (js) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] JS downloaded (${js.length} chars), caching...`); writeCacheAsync(db, jsKey, js); resolve(js); }, reject);
                             }
                         });
                     } else {
-                        console.log(`[SF Engine] No IndexedDB, downloading JS directly from ${m.jsUrl}...`);
-                        xhrText(m.jsUrl, resolve, reject);
+                        console.log(`[SF Engine] No IndexedDB, downloading JS directly from ${source.label}...`);
+                        xhrText(source.js, resolve, reject);
                     }
                 };
 
-                const fetchWasm = (resolve, reject) => {
-                    if (!m.wasmUrl) { console.log(`[SF Engine] No WASM URL for this model`); resolve(null); return; }
-                    // Handle embedded WASM (base64 in userscript)
-                    if (m.embeddedWasm && typeof EMBEDDED_SF19_SMALLNET_WASM_B64 !== 'undefined') {
-                        console.log(`[SF Engine] Using embedded WASM (base64, ${EMBEDDED_SF19_SMALLNET_WASM_B64.length} chars)`);
-                        try {
-                            const binary = atob(EMBEDDED_SF19_SMALLNET_WASM_B64);
-                            const bytes = new Uint8Array(binary.length);
-                            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                            if (db) writeCacheAsync(db, wasmKey, bytes).catch(() => {});
-                            resolve(bytes);
-                        } catch (e) {
-                            reject(new Error(`Embedded WASM decode failed: ${e.message || e}`));
-                        }
-                        return;
-                    }
+                // WASM bytes for one source: IndexedDB cache → network with
+                // truncation + pinned-hash checks before anything is cached.
+                const fetchWasmFrom = (source, resolve, reject) => {
+                    if (!source.wasm) { console.log(`[SF Engine] No WASM URL for this source`); resolve(null); return; }
                     if (db) {
                         readCache(db, wasmKey, (_, cachedWasm) => {
                             if (!isCurrentLoad()) return;
@@ -1943,16 +2057,24 @@ self.onmessage = function(e) {
                                 console.log(`[SF Engine] Found cached WASM in IndexedDB (${cachedWasm.length} bytes)`);
                                 resolve(cachedWasm);
                             } else {
-                                console.log(`[SF Engine] No cached WASM, downloading from ${m.wasmUrl}...`);
-                                xhrBinary(m.wasmUrl, (bytes) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] WASM downloaded (${bytes.length} bytes), caching...`); writeCacheAsync(db, wasmKey, bytes); resolve(bytes); },
-                                (e) => { if (!isCurrentLoad()) return; reject(new Error(`WASM download failed: ${e.message || e}. URL: ${m.wasmUrl}. Check: 1) Network 2) unpkg.com 3) ~113MB download allowed`)); });
+                                console.log(`[SF Engine] No cached WASM, downloading from ${source.label}...`);
+                                xhrBinary(source.wasm, (bytes) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] WASM downloaded (${bytes.length} bytes), caching...`); writeCacheAsync(db, wasmKey, bytes); resolve(bytes); },
+                                (e) => { if (!isCurrentLoad()) return; reject(new Error(`WASM download failed: ${e.message || e}`)); },
+                                { sha256: source.sha256, timeoutMs: WASM_TIMEOUT_MS });
                             }
                         });
                     } else {
-                        console.log(`[SF Engine] No IndexedDB, downloading WASM directly from ${m.wasmUrl}...`);
-                        xhrBinary(m.wasmUrl, resolve, (e) => reject(new Error(`WASM download failed (no DB): ${e.message || e}. URL: ${m.wasmUrl}`)));
+                        console.log(`[SF Engine] No IndexedDB, downloading WASM directly from ${source.label}...`);
+                        xhrBinary(source.wasm, resolve, (e) => reject(new Error(`WASM download failed (no DB): ${e.message || e}`)),
+                            { sha256: source.sha256, timeoutMs: WASM_TIMEOUT_MS });
                     }
                 };
+
+                // Source-chain state used by downloadFromNextSource. Declared
+                // BEFORE tryCompiledModule() runs below: with no IndexedDB the
+                // cache path is synchronous and would otherwise hit the TDZ.
+                let sourceIdx = 0;
+                let lastSourceFailure = null;
 
                 // Check for a COMPILED MODULE first (fastest path — skips the
                 // entire wasm compile; Module is structured-cloneable so IDB
@@ -1985,7 +2107,7 @@ self.onmessage = function(e) {
                     });
                 };
                 const launchFromModuleWithJsFallback = (mod) => {
-                    fetchJs((js) => { if (js) launch(js, null, mod); else loadFromPatchedCache(); }, () => loadFromPatchedCache());
+                    fetchJsFrom(sources[0], (js) => { launch(js, null, mod); }, () => loadFromPatchedCache());
                 };
 
                 // Check for cached patched worker data second (bytes mode)
@@ -2010,37 +2132,43 @@ self.onmessage = function(e) {
 
                     tryCompiledModule();
 
+                function downloadFromNextSource() {
+                    if (!isCurrentLoad()) return;
+                    if (sourceIdx >= sources.length) {
+                        const tried = sources.map(s => s.label).join(" → ");
+                        const err = `All download sources failed (${tried}). Last error: ${lastSourceFailure?.message || lastSourceFailure || "unknown"}. Check network / VPN / content blockers, or pick another model.`;
+                        console.error(`[SF Engine] ${err}`);
+                        state.engineLoadingInProgress = false;
+                        setEngineStatus("error", err);
+                        return;
+                    }
+                    const source = sources[sourceIdx++];
+                    const sourceNum = `${sourceIdx}/${sources.length}`;
+                    setEngineStatus("loading", `Downloading engine (${source.label})...`);
+                    console.log(`[SF Engine] Download attempt ${sourceNum} via ${source.label}...`);
+                    Promise.all([
+                        new Promise((resolve, reject) => fetchJsFrom(source, resolve, reject)),
+                        new Promise((resolve, reject) => fetchWasmFrom(source, resolve, reject)),
+                    ]).then(([jsCode, wasmBytes]) => {
+                        if (!isCurrentLoad()) return;
+                        if (!jsCode) {
+                            lastSourceFailure = new Error("JS code unavailable after download");
+                            downloadFromNextSource();
+                            return;
+                        }
+                        console.log(`[SF Engine] Both downloads done: JS=${!!jsCode}, WASM=${!!wasmBytes}`);
+                        launch(jsCode, wasmBytes);
+                    }).catch((e) => {
+                        if (!isCurrentLoad()) return;
+                        lastSourceFailure = e;
+                        console.warn(`[SF Engine] Source ${source.label} (${sourceNum}) failed: ${e.message || e}`);
+                        downloadFromNextSource();
+                    });
+                }
+
                 function startParallelDownload() {
-                    setEngineStatus("loading", "Downloading engine...");
-                    console.log(`[SF Engine] Starting parallel JS/WASM download...`);
-
-                    const jsPromise      = new Promise(fetchJs);
-                    const wasmPromise    = new Promise(fetchWasm);
-
-                    Promise.all([jsPromise, wasmPromise])
-                        .then(([jsCode, wasmBytes]) => {
-                            if (!isCurrentLoad()) return;
-                            console.log(`[SF Engine] Both downloads complete: JS=${!!jsCode}, WASM=${!!wasmBytes}`);
-                            if (!jsCode) {
-                                const err = "JS code unavailable after download. Both promises resolved but JS is empty.";
-                                console.error(`[SF Engine] ${err}`);
-                                state.engineLoadingInProgress = false;
-                                setEngineStatus("error", err);
-                                return;
-                            }
-                            launch(jsCode, wasmBytes);
-                        })
-                        .catch((e) => {
-                            if (!isCurrentLoad()) return;
-                            const msg = e?.message || String(e);
-                            let err = `Download failed: ${msg}`;
-                            if (msg.includes("WASM")) err += " (WASM download error - large file ~113MB, check network/quota)";
-                            if (msg.includes("JS")) err += " (JS download error - small file, check unpkg.com)";
-                            if (msg.includes("NetworkError") || msg.includes("Failed to fetch")) err += " - network blocked or offline";
-                            console.error(`[SF Engine] ${err}`);
-                            state.engineLoadingInProgress = false;
-                            setEngineStatus("error", err);
-                        });
+                    console.log(`[SF Engine] Starting engine download (${sources.length} source(s) configured)...`);
+                    downloadFromNextSource();
                 }
             }
         });
@@ -2058,20 +2186,7 @@ self.onmessage = function(e) {
         setEngineStatus("loading", "Clearing cache...");
         state.engineModuleCacheBroken = false;
         state.engineModuleKey = null;
-        openCache((dbErr, db) => {
-            if (!db) { loadLocalEngine(); return; }
-            // Delete JS, WASM, patched blob, compiled module, and legacy keys, then reload
-            const patchedKey = m.cacheKey + "_patched";
-            deleteCache(db, m.cacheKey + "_js",   () =>
-                deleteCache(db, m.cacheKey + "_wasm", () =>
-                    deleteCache(db, patchedKey, () =>
-                        deleteCache(db, patchedKey + "_module", () =>
-                            deleteCache(db, m.cacheKey, () => loadLocalEngine()) // legacy key too
-                        )
-                    )
-                )
-            );
-        });
+        purgeModelCache(m.id, () => loadLocalEngine());
     }
 
     function uninstallEngine() {
@@ -2087,35 +2202,11 @@ self.onmessage = function(e) {
         const m = getEngineById(settings.localModelId);
         state.engineModuleCacheBroken = false;
         state.engineModuleKey = null;
-        openCache((dbErr, db) => {
-            if (!db) { setEngineStatus("not_installed", ""); return; }
-            const patchedKey = m.cacheKey + "_patched";
-            deleteCache(db, m.cacheKey + "_js",   () =>
-                deleteCache(db, m.cacheKey + "_wasm", () =>
-                    deleteCache(db, patchedKey, () =>
-                        deleteCache(db, patchedKey + "_module", () =>
-                            deleteCache(db, m.cacheKey, () => setEngineStatus("not_installed", ""))
-                        )
-                    )
-                )
-            );
-        });
+        purgeModelCache(m.id, () => setEngineStatus("not_installed", ""));
         state.lastMoveResult = "Local engine uninstalled.";
         updateUI();
     }
 
-    function triggerFallback() {
-        if (settings.engineMode === 'local') return;
-        console.warn(`API Error. Switching to Local SF18 at Depth ${settings.depth}.`);
-        state.isThinking = false;
-        settings.engineMode = 'local';
-        saveSetting('engineMode', 'local');
-        if (state.ui.selMode) state.ui.selMode.value = 'local';
-        state.lastMoveResult = `⚠️ API Error. Switched to Local SF18.`;
-        loadLocalEngine();
-        if (state.lastSanitizedBoardFEN) analyzeLocal(state.lastSanitizedBoardFEN, settings.depth, state.isThinking);
-        updateUI();
-    }
     function computeSmartDepth(userDepth) {
         let d = settings.depth;
         // Anti-draw: boost depth when approaching 50-move / 75-move rule
@@ -2164,7 +2255,7 @@ self.onmessage = function(e) {
         state.isThinking = !0;
         state.analysisStartTime = performance.now();
         if (state.analysisWatchdog) { clearTimeout(state.analysisWatchdog); state.analysisWatchdog = null; }
-        const watchdogMs = settings.engineMode === "cloud" ? 30000 : 90000;
+        const watchdogMs = 90000;
         state.analysisWatchdog = setTimeout(() => {
             state.analysisWatchdog = null;
             if (state.isThinking && performance.now() - state.analysisStartTime > watchdogMs) {
@@ -2174,7 +2265,6 @@ self.onmessage = function(e) {
                 state.pendingLocalFEN = null;
                 state.pendingLocalDepth = null;
                 state.lastSanitizedBoardFEN = "";
-                if (state.currentCloudRequest) { try { state.currentCloudRequest.abort(); } catch (_) {} state.currentCloudRequest = null; }
                 updateUI();
             }
         }, watchdogMs + 2000);
@@ -2247,87 +2337,13 @@ self.onmessage = function(e) {
         }
 
         try {
-            if (settings.engineMode === "cloud") analyzeCloud(finalFEN, depth, isRetry);
-            else if (settings.engineMode === "sfonline") analyzeSF16(finalFEN, depth);
-            else analyzeLocal(finalFEN, depth, wasThinking);
+            analyzeLocal(finalFEN, depth, wasThinking);
         } catch (e) {
             console.error(`[SF Engine] analyze dispatch failed:`, e);
             handleError("Analyze failed", e);
         }
     }
-    function analyzeCloud(finalFEN, depth, isRetry) {
-        const actualDepth = Math.min(depth, 18);
-        const payload = {
-            fen: finalFEN,
-            depth: actualDepth,
-            maxThinkingTime: Math.min(settings.maxThinkingTime, CONFIG.API.MAX_TIME),
-            taskId: Math.random().toString(36).substring(7),
-        };
-        if (settings.searchMoves.trim()) payload.searchmoves = settings.searchMoves.trim();
-        state.lastPayload = `POST https://chess-api.com/v1\n${JSON.stringify(payload, null, 2)}`;
-        if (state.ui.liveOutput) state.ui.liveOutput.textContent = isRetry ? "♻️ Retrying Safe FEN..." : "☁️ SF18 Cloud Analysis...";
-        updateUI();
-        state.currentCloudRequest = GM_xmlhttpRequest({
-            method: "POST", url: "https://chess-api.com/v1",
-            headers: { "Content-Type": "application/json" },
-            data: JSON.stringify(payload), timeout: 15000,
-            onload: (res) => handleCloudResponse(res, finalFEN, actualDepth, isRetry),
-            onerror: (err) => { handleError("Network Error", err); triggerFallback(); },
-            ontimeout: () => { handleError("Timeout (15s)"); triggerFallback(); },
-        });
-    }
-    function analyzeSF16(finalFEN, depth) {
-        const actualDepth = Math.min(depth, 15);
-        const url = `https://stockfish.online/api/s/v2.php?fen=${encodeURIComponent(finalFEN)}&depth=${actualDepth}&mode=bestmove`;
-        state.lastPayload = `GET ${url}`;
-        if (state.ui.liveOutput) state.ui.liveOutput.textContent = "☁️ SF17.1.0 Analysis...";
-        updateUI();
-        state.currentCloudRequest = GM_xmlhttpRequest({
-            method: "GET", url, timeout: 20000,
-            onload: (res) => handleSF16Response(res, finalFEN),
-            onerror: (err) => { handleError("Network Error (SF16)", err); triggerFallback(); },
-            ontimeout: () => { handleError("Timeout (SF16 20s)"); triggerFallback(); },
-        });
-    }
-    function handleSF16Response(response, sentFEN) {
-        state.isThinking = !1;
-        state.lastResponse = response.responseText;
-        try {
-            if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
-            const data = JSON.parse(response.responseText);
-            if (!data.success || !data.bestmove) { triggerFallback(); return; }
-            const bestMove = data.bestmove.split(" ")[1] || data.bestmove;
-            const duration = ((performance.now() - state.analysisStartTime) / 1000).toFixed(2);
-            const contRaw = data.continuation;
-            const cont = Array.isArray(contRaw) ? contRaw : (typeof contRaw === "string" ? contRaw.trim().split(/\s+/) : null);
-            processBestMove(bestMove, data.evaluation, data.mate, cont, null, duration, true, sentFEN);
-        } catch (e) { triggerFallback(); }
-        updateUI();
-    }
-    function handleCloudResponse(response, sentFEN, depth, isRetry) {
-        state.isThinking = !1;
-        state.lastResponse = response.responseText;
-        if (response.responseText.includes("HIGH_USAGE") || response.status === 429) { triggerFallback(); return; }
-        try {
-            if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
-            const rawData = JSON.parse(response.responseText);
-            const result = Array.isArray(rawData) ? rawData[0] : rawData;
-            if (!result || result.error || result.status === "error") {
-                const errText = result?.error || result?.message || "Unknown Error";
-                if (errText.includes("HIGH_USAGE")) { triggerFallback(); return; }
-                if ((errText.includes("FEN") || errText.includes("VALIDATION")) && !isRetry) {
-                    const parts = sentFEN.split(" ");
-                    if (parts.length >= 4 && parts[3] !== "-") { parts[3] = "-"; analyze(depth, parts.join(" "), !0); return; }
-                }
-                triggerFallback(); return;
-            }
-            if (result.move || result.bestmove) {
-                const duration = ((performance.now() - state.analysisStartTime) / 1000).toFixed(2);
-                processBestMove(result.move || result.bestmove, result.eval, result.mate, result.continuationArr, result.winChance, duration, true, sentFEN);
-            } else { triggerFallback(); }
-        } catch (e) { triggerFallback(); }
-        updateUI();
-    }
+
     function analyzeLocal(fen, depth, wasThinking = false) {
         console.log(`[SF Engine] analyzeLocal called: fen=${fen?.substring(0,40)}..., depth=${depth}, engineStatus=${state.engineStatus}, hasEngine=${!!state.localEngine}`);
     if (!state.localEngine || state.engineStatus !== "ready") {
@@ -2444,6 +2460,10 @@ self.onmessage = function(e) {
             if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
             state.pendingReadyProbe = false;
             state.engineRetryAt = 0;
+            // A successful handshake means the (possibly re-downloaded) engine
+            // is healthy — clear the self-heal marker so a future corruption
+            // can trigger a fresh auto-heal.
+            if (state.engineHealMap) delete state.engineHealMap[settings.localModelId || "sf19_small"];
             if (state.engineStatus !== "ready") {
                 const m = getEngineById(settings.localModelId || "sf19_small");
                 setEngineStatus("ready", "");
@@ -2577,16 +2597,11 @@ self.onmessage = function(e) {
         const evalNum = (evalScore !== null && evalScore !== undefined) ? parseFloat(evalScore) : null;
         const mateNum = (mate !== null && mate !== undefined && mate !== 0) ? parseInt(mate) : null;
 
-        // Normalize engine score to "our perspective" (positive = good for us):
-        // - chess-api (cloud) and stockfish.online (sfonline) return WHITE-perspective
-        //   eval AND mate (confirmed via API docs + original bar logic).
-        // - local engine returns side-to-move perspective; we always analyze on our turn.
-        const playingAsRaw = state.board?.game?.getPlayingAs?.() || state.playingAs || 1;
-        const playingAsNorm = (playingAsRaw === 1 || playingAsRaw === "w" || playingAsRaw === "white") ? 1 : 2;
-        const ourSign = (playingAsNorm === 2) ? -1 : 1;
-        const needsFlip = settings.engineMode !== "local";
-        const normEval = evalNum !== null ? (needsFlip ? ourSign * evalNum : evalNum) : null;
-        const normMate = mateNum !== null ? (needsFlip ? ourSign * mateNum : mateNum) : null;
+        // The local engine reports scores from the side-to-move perspective and
+        // we only ever analyze on our own turn, so normEval/normMate are already
+        // "our perspective" (positive = good for us).
+        const normEval = evalNum;
+        const normMate = mateNum;
         state.currentMateNorm = normMate;
 
         if (settings.showEvalBar) EvalBar.update(normEval, normMate);
@@ -2641,8 +2656,8 @@ self.onmessage = function(e) {
         state.lastMoveResult = `✅ Best: <span style="font-weight:bold; color:var(--bot-primary);">${bestMove}</span>`;
 
         // ─── Threat Detection ── detect if opponent's last move created a threat
-        // Works in all engine modes (cloud, local, SF16) by using the current
-        // analysis result. Only runs when it's our turn (opponent just moved).
+        // using the current analysis result. Only runs when it's our turn
+        // (opponent just moved).
         if (ThreatDetector.enabled && isOurTurnNow()) {
             // normEval/normMate are already "our perspective" (positive = good for us).
 
@@ -3124,7 +3139,7 @@ function triggerAutoMove(fen = null) {
         // ── Model info panel ──
         const infoEl = document.getElementById("localModelInfo");
         if (infoEl) {
-            const fmtLabel = m.format === "asmjs" ? "asm.js — single JS file (no WASM)" : "WASM + JS (unpkg)";
+            const fmtLabel = m.format === "asmjs" ? "asm.js — single JS file (no WASM)" : "WASM + JS (multi-CDN + self-hosted fallback)";
             const caps = [
                 m.hasNNUE         ? "NNUE" : "HCE (classical eval)",
                 m.hasSkillLevel   ? "Skill Level" : null,
@@ -3135,20 +3150,20 @@ function triggerAutoMove(fen = null) {
                 m.hasMinThink     ? "Min Think" : null,
                 m.hasMoveOverhead ? "Move Overhead" : null,
             ].filter(Boolean).join(" · ");
+            const srcNames = (m.sources || []).map(s => s.label).join(" → ") || "legacy";
             infoEl.innerHTML =
                 `<b>Format:</b> ${fmtLabel}<br>` +
                 `<b>Max Depth:</b> ${m.maxDepth}<br>` +
                 `<b>Options:</b> ${caps}<br>` +
-                `<b>JS:</b> ${m.jsUrl || "(bundled @resource)"}<br>` +
-                (m.wasmUrl ? `<b>WASM:</b> ${m.wasmUrl}` : "<b>WASM:</b> N/A");
+                `<b>Download sources:</b> ${srcNames}`;
         }
 
         // ── Source info box ──
         const srcEl = document.getElementById("localSrcInfo");
         if (srcEl) {
-            srcEl.innerHTML =
-                `<b>JS:</b> ${m.jsUrl || "(bundled @resource)"}<br>` +
-                (m.wasmUrl ? `<b>WASM:</b> ${m.wasmUrl}` : "<b>WASM:</b> N/A — asm.js engine");
+            srcEl.innerHTML = ((m.sources || []).map(s =>
+                `<b>${s.label}:</b> ${s.js || "(bundled @resource)"}${s.wasm ? "<br>→ " + s.wasm : ""}`
+            ).join("<br>") || "legacy source URLs");
         }
 
         // ── Depth cap ──
@@ -3501,12 +3516,6 @@ function triggerAutoMove(fen = null) {
             ${SM} input[type="color"], ${SL} input[type="color"] { height: 26px; padding: 0; width: 40px; cursor: pointer; border: none; }
             ${SM} select, ${SL} select { height: 26px; padding: 0 6px; font-size: 0.88em; }
 
-            /* ── Mode-dependent cloud rows ── */
-            ${S} .show-cloud { display: none; }
-            ${S} .show-local { display: none; }
-            body.mode-cloud ${S} .show-cloud { display: flex; }
-            body.mode-local ${S} .show-local { display: flex; }
-
             /* ── RGB inputs ── */
             ${SM} .rgb-inputs, ${S} .rgb-inputs { display: flex; gap: 5px; flex: 1; justify-content: flex-end; }
             ${SM} .rgb-inputs input, ${S} .rgb-inputs input { width: 46px; text-align: center; }
@@ -3679,27 +3688,11 @@ function triggerAutoMove(fen = null) {
                     <div class="sect">
                         <div class="sect-title">Engine</div>
                         <div class="row">
-                            <label>Model</label>
-                            <select id="selMode" style="width:200px;">
-                                <option value="cloud">SF 18.0.0 — Cloud (fast)</option>
-                                <option value="sfonline">SF 17.1.0 — Cloud (variable)</option>
-                                <option value="local">SF — Local (offline)</option>
-                            </select>
-                        </div>
-                        <div class="row">
                             <label>Depth <span style="color:#666;">(max <span id="lblMaxDepth">18</span>)</span></label>
                             <div style="display:flex; align-items:center; gap:6px;">
                                 <input type="number" id="inpDepth" min="1" max="18" value="${settings.depth}">
                                 <span id="lblActualDepth" style="font-size:0.75em; color:#4fc3f7; display:none;" title="Anti-draw depth boost active"></span>
                             </div>
-                        </div>
-                        <div class="row show-cloud">
-                            <label>Max Time (ms)</label>
-                            <input type="number" id="inpTime" value="${settings.maxThinkingTime}">
-                        </div>
-                        <div class="row show-cloud">
-                            <label>Search Moves</label>
-                            <input type="text" id="inpSearch" value="${settings.searchMoves}" placeholder="e.g. e2e4 d2d4">
                         </div>
                     </div>
 
@@ -4051,11 +4044,8 @@ function triggerAutoMove(fen = null) {
             btnAnalyze: document.getElementById("btnAnalyze"),
             btnRematch: document.getElementById("btnRematch"),
             btnBullet: document.getElementById("btnBullet"),
-            selMode: document.getElementById("selMode"),
             inpDepth: document.getElementById("inpDepth"),
             lblActualDepth: document.getElementById("lblActualDepth"),
-            inpTime: document.getElementById("inpTime"),
-            inpSearch: document.getElementById("inpSearch"),
             chkRun: document.getElementById("chkRun"),
             chkMove: document.getElementById("chkMove"),
             chkQueue: document.getElementById("chkQueue"),
@@ -4132,15 +4122,14 @@ pvSettings: document.getElementById("pvSettings"),
             chkRematch: document.getElementById("chkRematch")
         };
         applyMenuPosition();
-        // Engine is loaded lazily only when user selects "Local Engine" mode.
-        // Do NOT load at startup — avoids downloading 20MB Stockfish in cloud/sfonline modes.
+        // The engine is loaded lazily on first use or via the local-engine
+        // modal; this init path only hydrates the saved UI state.
         if (state.localEngine) {
             setEngineStatus("ready", "");
         } else {
             updateLocalSettingsUI();
         }
         // Bindings (all identical to original)
-        state.ui.selMode.value = settings.engineMode;
         state.ui.selMenuPos.value = settings.menuPosition;
         state.ui.btnAnalyze.onclick = () => analyze();
         if (state.ui.btnBullet) state.ui.btnBullet.onclick = () => toggleBullet();
@@ -4345,23 +4334,6 @@ pvSettings: document.getElementById("pvSettings"),
                 saveSetting("panelH", state.ui.panel.style.height);
             }
         }).observe(state.ui.panel);
-        state.ui.selMode.onchange = (e) => {
-            saveSetting("engineMode", e.target.value);
-            state.isThinking = false;
-            if (settings.engineMode === "local") {
-                // Auto-load immediately when switching to local
-                if (!state.localEngine && !state.engineLoadingInProgress) {
-                    loadLocalEngine();
-                }
-            } else {
-                // Switching away from local — kill thinking but keep engine warm
-                if (state.currentCloudRequest) {
-                    try { state.currentCloudRequest.abort(); } catch(_) {}
-                    state.currentCloudRequest = null;
-                }
-            }
-            updateUI();
-        };
         state.ui.chkDebug.onchange = (e) => { saveSetting("debugLogs", e.target.checked); updateUI(); };
         const durSlider = document.getElementById("visDuration");
         const durText = document.getElementById("visDurationText");
@@ -4419,8 +4391,7 @@ pvSettings: document.getElementById("pvSettings"),
             ["themeBg","themeText","themeBorder","themePrimary"].forEach(k => saveSetting(k, k==="themeBg"?"#f0f0f0":k==="themeText"?"#222222":k==="themeBorder"?"#cccccc":"#81b64c"));
             applyTheme();
         };
-        bind(state.ui.inpDepth, "depth", "num"); bind(state.ui.inpTime, "maxThinkingTime", "num");
-        bind(state.ui.inpSearch, "searchMoves"); bind(state.ui.chkRun, "autoRun", "chk");
+        bind(state.ui.inpDepth, "depth", "num"); bind(state.ui.chkRun, "autoRun", "chk");
         bind(state.ui.chkMove, "autoMove", "chk"); bind(state.ui.chkQueue, "autoQueue", "chk");
 
         // ─── New feature settings bindings ──
@@ -4593,12 +4564,8 @@ pvSettings: document.getElementById("pvSettings"),
     requestAnimationFrame(enforceBounds);
     function updateUI() {
         if (!state.ui.panel) return;
-        document.body.classList.remove("mode-cloud", "mode-local", "mode-sfonline");
-        document.body.classList.add(`mode-${settings.engineMode}`);
         if (state.ui.debugArea) state.ui.debugArea.style.display = settings.debugLogs ? "flex" : "none";
-        let maxD = 18;
-        if (settings.engineMode === "local") maxD = getEngineById(settings.localModelId || "sf19_small").maxDepth;
-        else if (settings.engineMode === "sfonline") maxD = 15;
+        const maxD = getEngineById(settings.localModelId || "sf19_small").maxDepth;
         if (state.ui.lblMaxDepth) state.ui.lblMaxDepth.innerText = maxD;
         if (state.ui.inpDepth) state.ui.inpDepth.max = maxD;
         if (state.ui.inpPVDepth) state.ui.inpPVDepth.max = 45;
@@ -4647,7 +4614,6 @@ pvSettings: document.getElementById("pvSettings"),
         if (state.pendingAnalysis) { clearTimeout(state.pendingAnalysis); state.pendingAnalysis = null; }
         if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
         if (state.rematchTimeout) { clearTimeout(state.rematchTimeout); state.rematchTimeout = null; }
-        if (state.currentCloudRequest) { try { state.currentCloudRequest.abort(); } catch (_) {} state.currentCloudRequest = null; }
         state.rematchAttempted = false;
         state._justResetForNewGame = true;
         state.premovePending = false;
@@ -4719,8 +4685,8 @@ pvSettings: document.getElementById("pvSettings"),
             if (isTurn && clean !== state.lastSanitizedBoardFEN) {
                 // Subtle anti-cheat: rarely skip analysis start (short pause)
                 if (!state.pendingAnalysis && !shouldPauseAnalysis()) {
-                    // Brief human-glance delay before analyzing (short for cloud-fast)
-                    const glanceMs = settings.bulletMode ? 0 : (settings.engineMode === "cloud" ? getRandomInt(150, 600) : getRandomInt(400, 1200));
+                    // Brief human-glance delay before analyzing starts
+                    const glanceMs = settings.bulletMode ? 0 : getRandomInt(400, 1200);
                     state.pendingAnalysis = setTimeout(() => {
                         state.pendingAnalysis = null;
                         try {
