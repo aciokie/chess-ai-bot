@@ -90,7 +90,7 @@
     }
 
     if (typeof window.GM_info === 'undefined') {
-        var version = '11.7.9';
+        var version = '11.8.0';
         try {
             if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest) {
                 version = chrome.runtime.getManifest().version;

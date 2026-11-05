@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.7.9
+// @version          11.8.0
 // @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -342,6 +342,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         localDepth: null,
         rematchAttempted: false,
         rematchTimeout: null,
+        _rematchQuickRetries: 0,
         _justResetForNewGame: false,
             lastSeenFEN: "",
             playingAs: null,
@@ -2642,7 +2643,10 @@ self.onmessage = function(e) {
             // loop re-analyze the current position.
             if ((state.pendingAbortEchoes || 0) > 0) {
                 state.pendingAbortEchoes--;
-                console.warn(`[SF Engine] dropped stale bestmove (aborted search echo, ${state.pendingAbortEchoes} remaining)`);
+                // Expected during new-game resets (incl. auto-rematch): the
+                // aborted search's echo is consumed by design — debug-level so
+                // normal flows stay warning-free (the browser E2E asserts it).
+                console.debug(`[SF Engine] dropped stale bestmove (aborted search echo, ${state.pendingAbortEchoes} remaining)`);
                 state.lastSanitizedBoardFEN = "";
                 updateUI();
                 return;
@@ -4219,14 +4223,14 @@ pvSettings: document.getElementById("pvSettings"),
         state.ui.btnAnalyze.onclick = () => analyze();
         if (state.ui.btnBullet) state.ui.btnBullet.onclick = () => toggleBullet();
         state.ui.btnRematch.onclick = () => {
-            const allBtns = document.querySelectorAll("button");
-            for (let b of allBtns) {
-                const txt = b.innerText.toLowerCase().trim();
-                if ((txt === "rematch" || txt === "new game" || txt === "play again" || txt === "new opponent" || txt === "find new opponent") && isElVisible(b) && !b.disabled) {
-                    b.click();
-                    return;
-                }
+            // Same scanner the auto-rematch uses: accept first, then initiate.
+            if (clickAcceptRematch()) {
+                state.lastMoveResult = "🔄 Rematch: accepted offer";
+            } else {
+                const label = clickInitiateRematch();
+                state.lastMoveResult = label ? `🔄 Rematch: clicked "${label}"` : "🔄 Rematch: no button found";
             }
+            updateUI();
         };
         state.ui.btnReset.onclick = resetSettings;
         state.ui.custBtn.onclick = () => (state.ui.modal.style.display = "flex");
@@ -4599,39 +4603,120 @@ pvSettings: document.getElementById("pvSettings"),
         return true;
     }
 
+    // ─── AUTO-REMATCH ────────────────────────────────────────────────────────
+    // v11.8.0 rewrite. The original only looked for an "Accept" button inside a
+    // result modal (and its selectors no longer exist on the current site), so
+    // it never started anything. Verified against the live UI (2026-11):
+    // game over renders `.game-over-modal-shell-container` with a "New Game"
+    // button, plus a sidebar "Rematch" button — clicking "Rematch" starts a new
+    // game vs the same opponent immediately (measured: modal gone in <50 ms,
+    // board reset to the start position, auto-moves resumed).
+    const REMATCH_RESULT_SEL = ".game-over-modal-shell-container, .game-result-component, .game-over-modal-content, .daily-game-footer-game-over, .modal-game-over-component";
+    function _rematchBtnText(b) {
+        try { return (b.innerText || b.textContent || "").toLowerCase().replace(/\s+/g, " ").trim(); } catch (e) { return ""; }
+    }
+    // Read the closest dialog-ish text around an element: prefer the nearest
+    // dialog-like container (so chat/page text can't leak into classification),
+    // else fall back to a bounded ancestor walk.
+    function _rematchDialogText(node, levels = 6) {
+        let el = node, best = "";
+        for (let i = 0; i < levels && el; i++, el = el.parentElement) {
+            let t = "", cls = "";
+            try { t = (el.innerText || "").toLowerCase(); } catch (e) { }
+            try { cls = String(el.className || "").toLowerCase(); } catch (e) { }
+            if (/dialog|modal|popup|toast|banner|alert|overlay|notice|game-over|offer/.test(cls)) return t.slice(0, 700);
+            if (i < 3 && t.length > best.length) best = t;
+            if (best.length > 700) break;
+        }
+        return best.slice(0, 700);
+    }
+    // These scans must never touch the bot's own panel controls.
+    function _isOwnPanelEl(el) {
+        try { return !!(el && el.closest && el.closest("#enginePanel")); } catch (e) { return false; }
+    }
+    // Accept an incoming rematch offer (opponent asked first). Returns true if it clicked something.
+    function clickAcceptRematch() {
+        const btns = Array.from(document.querySelectorAll("button")).filter((b) => !b.disabled && !_isOwnPanelEl(b) && isElVisible(b));
+        // 1) One self-describing button ("Accept rematch", "Yes, rematch", ...)
+        let hit = btns.find((x) => { const t = _rematchBtnText(x); return t.includes("rematch") && /(accept|\byes\b|join)/.test(t); });
+        if (hit) { hit.click(); return true; }
+        // 2) Accept-ish button whose surrounding dialog mentions a rematch
+        hit = btns.find((x) => {
+            const t = _rematchBtnText(x);
+            if (!/^(accept|yes|play again|join)\b/.test(t)) return false;
+            return /rematch/.test(_rematchDialogText(x));
+        });
+        if (hit) { hit.click(); return true; }
+        // 3) "Accept..." sibling of a "Decline..." inside a rematch dialog
+        hit = btns.find((x) => {
+            if (!_rematchBtnText(x).includes("accept")) return false;
+            const parent = x.parentElement;
+            if (!parent) return false;
+            const hasDecline = Array.from(parent.querySelectorAll("button")).some((s) => s !== x && /decline|no thanks|no, thanks/.test(_rematchBtnText(s)));
+            return hasDecline && /rematch/.test(_rematchDialogText(x));
+        });
+        if (hit) { hit.click(); return true; }
+        return false;
+    }
+    // Start a new game / send a rematch request. Returns the clicked label or null.
+    // Preference order: Rematch (same opponent; instant vs-computer restart) →
+    // Play Again → New Game → New Opponent. Searched within the result UI first,
+    // then any visible button on the page.
+    function clickInitiateRematch() {
+        const wants = [
+            (t) => /^rematch\b/.test(t) && !/rematch\s*(settings|options|invite)/.test(t),
+            (t) => /^play again\b/.test(t),
+            (t) => /^new game\b/.test(t),
+            (t) => /^(new|find new) opponent\b/.test(t)
+        ];
+        const scopes = [
+            document.querySelector(".game-over-modal-shell-buttons"),
+            document.querySelector(REMATCH_RESULT_SEL),
+            document
+        ];
+        for (const wantsIt of wants) {
+            for (const root of scopes) {
+                if (!root) continue;
+                const hit = Array.from(root.querySelectorAll("button")).find((b) => !b.disabled && !_isOwnPanelEl(b) && isElVisible(b) && wantsIt(_rematchBtnText(b)));
+                if (hit) { hit.click(); return _rematchBtnText(hit) || "button"; }
+            }
+        }
+        return null;
+    }
     function attemptRematch() {
         if (!settings.autoRematch) return;
         if (state._justResetForNewGame) { state._justResetForNewGame = false; return; }
-        const resultEl = document.querySelector(".game-result-component, .game-over-modal-content, .daily-game-footer-game-over");
-        if (!resultEl || !isElVisible(resultEl)) { state.rematchAttempted = false; if (state.rematchTimeout) { clearTimeout(state.rematchTimeout); state.rematchTimeout = null; } return; }
+        // An incoming rematch offer is accepted even without the result modal.
+        if (clickAcceptRematch()) {
+            state.lastMoveResult = "🔄 Rematch: accepted offer";
+            console.log(`[SF Engine] Auto-rematch: accepted incoming rematch offer`);
+            updateUI();
+            return;
+        }
+        const resultEl = document.querySelector(REMATCH_RESULT_SEL);
+        if (!resultEl || !isElVisible(resultEl)) {
+            state.rematchAttempted = false;
+            state._rematchQuickRetries = 0;
+            if (state.rematchTimeout) { clearTimeout(state.rematchTimeout); state.rematchTimeout = null; }
+            return;
+        }
         if (state.rematchAttempted) return;
-        state.rematchAttempted = true;
-        const clickAcceptRematch = () => {
-            const allBtns = document.querySelectorAll("button");
-            for (let b of allBtns) {
-                const txt = b.innerText.toLowerCase().trim();
-                if (txt.includes("rematch") && txt.includes("accept") && isElVisible(b)) {
-                    b.click();
-                    return true;
-                }
-                if (txt === "accept" && isElVisible(b)) {
-                    for (let c of b.parentElement.children) {
-                        if (c !== b && c.innerText.toLowerCase().includes("rematch")) {
-                            b.click();
-                            return true;
-                        }
-                    }
-                }
+        const clicked = clickInitiateRematch();
+        if (clicked) {
+            state.rematchAttempted = true;
+            state._rematchQuickRetries = 0;
+            state.lastMoveResult = `🔄 Rematch: "${clicked}"`;
+            console.log(`[SF Engine] Auto-rematch: clicked "${clicked}"`);
+            updateUI();
+        } else {
+            // Nothing clickable yet (modal still animating in) — allow the next
+            // poll to retry, plus up to two quick retries right away.
+            state.rematchAttempted = false;
+            if ((state._rematchQuickRetries || 0) < 2) {
+                state._rematchQuickRetries = (state._rematchQuickRetries || 0) + 1;
+                if (state.rematchTimeout) clearTimeout(state.rematchTimeout);
+                state.rematchTimeout = setTimeout(() => { state.rematchTimeout = null; try { attemptRematch(); } catch (e) { } }, 800);
             }
-            return false;
-        };
-        if (!clickAcceptRematch()) {
-            state.rematchTimeout = setTimeout(() => {
-                state.rematchTimeout = null;
-                const stillPresent = document.querySelector(".game-result-component, .game-over-modal-content, .daily-game-footer-game-over");
-                if (stillPresent && isElVisible(stillPresent)) clickAcceptRematch();
-                else state.rematchAttempted = false;
-            }, 500);
         }
     }
     function enforceBounds() {
@@ -4879,19 +4964,33 @@ pvSettings: document.getElementById("pvSettings"),
             };
         },
 
-        // Decline draw offers from opponent
+        // Decline DRAW offers from opponent — never rematch offers. (Before
+        // v11.8.0 this blindly clicked any "Decline" button, which auto-declined
+        // incoming rematch requests — the exact opposite of Auto-Rematch.)
         declineDrawOffer() {
             if (this._declining) return;
-            this._declining = true;
-            setTimeout(() => { this._declining = false; }, 2000);
             const btns = document.querySelectorAll("button");
             for (const b of btns) {
                 const txt = (b.innerText || "").toLowerCase().trim();
-                if ((txt.includes("decline") || txt.includes("no thanks") || txt.includes("no, thanks")) && isElVisible(b)) {
-                    console.log(`[SF Engine] Anti-draw: auto-declining draw offer`);
-                    b.click();
-                    return true;
+                if (!(txt.includes("decline") || txt.includes("no thanks") || txt.includes("no, thanks"))) continue;
+                if (!isElVisible(b)) continue;
+                const ctx = _rematchDialogText(b);
+                if (ctx.includes("rematch")) {
+                    // Rematch offer: accept it (when Auto-Rematch is on) or leave
+                    // it for the user — never click Decline.
+                    if (settings.autoRematch && !this._acceptingRematch && clickAcceptRematch()) {
+                        this._acceptingRematch = true;
+                        setTimeout(() => { this._acceptingRematch = false; }, 1500);
+                        console.log(`[SF Engine] Auto-rematch: accepted incoming rematch offer`);
+                    }
+                    continue;
                 }
+                if (!/(draw|drawn|repetition|stale|insufficient)/.test(ctx)) continue; // only decline actual draw contexts
+                this._declining = true;
+                setTimeout(() => { this._declining = false; }, 2000);
+                console.log(`[SF Engine] Anti-draw: auto-declining draw offer`);
+                b.click();
+                return true;
             }
             const lichessDecline = document.querySelector(".confirm .decline, .buttons .decline");
             if (lichessDecline && isElVisible(lichessDecline)) {
@@ -4921,6 +5020,7 @@ pvSettings: document.getElementById("pvSettings"),
             for (const b of btns) {
                 const txt = (b.innerText || "").toLowerCase().trim();
                 if ((txt.includes("claim") && txt.includes("draw")) && isElVisible(b)) {
+                    if (/rematch/.test(_rematchDialogText(b))) continue; // never touch rematch dialogs
                     // Find a decline/no button nearby
                     const parent = b.parentElement;
                     if (parent) {

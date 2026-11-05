@@ -9,6 +9,8 @@
  *   - the bundled engine loads LOCALLY (no CDN) and reaches "Ready"
  *   - switching models to the asm.js engine (sf9_00) works
  *   - a page reload uses the IndexedDB-cached instant-load path
+ *   - REAL vs-computer games play, survive navigation + resume, and with
+ *     Auto-Rematch enabled the bot itself starts the next game after a resign
  * Writes results + a screenshot to extension/e2e-artifacts/.
  *
  * Usage:
@@ -274,6 +276,50 @@ const WALK_SHADOW = `(() => { const w = (root) => { let t = root.textContent || 
         R.stabilityGame = { clicked: R.resumeClick, positions: fens2.length };
         check('stability: resume keeps playing after navigation', fens2.length >= 3, 'saw ' + fens2.length);
     } catch (e) { check('stability: navigation recovery', false, String(e).slice(0, 150)); }
+
+    // 7. auto-rematch: enable it via the REAL panel checkbox, resign the live
+    //    game, and the bot itself must start the next one (it clicks the
+    //    sidebar "Rematch" control — verified live to reset the board and
+    //    resume auto-moves instantly).
+    try {
+        R.rematchEnabled = await p.evaluate(() => {
+            const cb = document.getElementById('chkRematch');
+            if (cb && !cb.checked) cb.click();
+            return cb ? cb.checked : null;
+        });
+        R.rematchStored = await p.evaluate(() => localStorage.getItem('cabe_ext_bot_autoRematch'));
+        check('auto-rematch: checkbox enabled + persisted', R.rematchEnabled === true && String(R.rematchStored).includes('true'), 'ui=' + R.rematchEnabled + ' ls=' + R.rematchStored);
+
+        const resignOpen = await p.evaluate(() => {
+            const b = Array.from(document.querySelectorAll('button')).find((x) => x.offsetParent && x.getAttribute('aria-label') === 'Resign');
+            if (b) { b.click(); return true; } return false;
+        });
+        await sleep(1200);
+        const resignConfirm = await p.evaluate(() => {
+            const b = Array.from(document.querySelectorAll('button')).find((x) => x.offsetParent && /^resign$/i.test((x.textContent || '').trim()));
+            if (b) { b.click(); return true; } return false;
+        });
+        check('auto-rematch: resign submitted', resignOpen && resignConfirm, 'open=' + resignOpen + ' confirm=' + resignConfirm);
+
+        await sleep(4000); // game-over UI renders; the bot's 2-4s poll fires
+        R.rematchModalSeen = await p.evaluate(() => !!document.querySelector('.game-over-modal-shell-container'));
+
+        const fens3 = [];
+        const g2 = Date.now();
+        while (Date.now() - g2 < 90000 && fens3.length < 4) {
+            const fen = await p.evaluate(() => {
+                const el = document.querySelector('chess-board, wc-chess-board');
+                return el && el.game && el.game.getFEN ? el.game.getFEN() : null;
+            });
+            if (fen && fens3[fens3.length - 1] !== fen) fens3.push(fen);
+            await p.waitForTimeout(1200);
+        }
+        R.rematchGame = { positions: fens3.length, modalSeen: R.rematchModalSeen, fens: fens3.slice(0, 4).map((f) => f.slice(0, 32)) };
+        const rematchLog = R.console.filter((l) => l.includes('Auto-rematch'));
+        check('auto-rematch: bot clicked a rematch control', rematchLog.length > 0, 'logs: ' + R.console.slice(-5).join(' | '));
+        check('auto-rematch: a fresh game is being played', fens3.length >= 3, 'saw ' + fens3.length + ' — ' + JSON.stringify(R.rematchGame.fens));
+        try { await p.screenshot({ path: path.join(ARTIFACTS, 'e2e-rematch-screenshot.png') }); } catch (e) { }
+    } catch (e) { check('auto-rematch phase', false, String(e).slice(0, 150)); }
 
     check('no console errors', R.errors.length === 0, R.errors.slice(0, 3).join(' | '));
     check('no engine warnings', R.engineWarnings.length === 0, R.engineWarnings.slice(0, 3).join(' | '));
