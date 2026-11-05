@@ -147,6 +147,10 @@ check('H keybind + panel hide behavior preserved', () => {
     assert(bot.includes('state.ui.minBtn.onclick'), '✕ hide button missing');
     assert(bot.includes('e.altKey'), 'Alt+B keybind missing');
 });
+check('duplicate-instance guard present (cross-world DOM marker)', () => {
+    assert(bot.includes('data-sf-bot-active'), 'singleton guard marker missing');
+    assert(bot.includes('skipping duplicate injection'), 'guard message missing');
+});
 check('all major feature markers present', () => {
     const markers = [
         'toggleBullet', 'shouldPauseAnalysis', 'scheduleAutoMove', 'processBestMove',

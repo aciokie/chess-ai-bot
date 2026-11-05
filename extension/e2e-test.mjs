@@ -228,6 +228,53 @@ const WALK_SHADOW = `(() => { const w = (root) => { let t = root.textContent || 
         try { await p.screenshot({ path: path.join(ARTIFACTS, 'e2e-game-screenshot.png') }); } catch (e) { }
     } catch (e) { check('real game ran', false, String(e).slice(0, 150)); }
 
+    // 6. stability: full navigation away & back — a fresh instance must
+    //    re-engage (engine from cache, then a second game must play).
+    try {
+        await p.goto('https://www.chess.com/analysis', { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await p.waitForSelector('#enginePanel', { state: 'attached', timeout: 45000 });
+        const r2 = await waitReady(45000);
+        check('stability: engine ready after full navigation', r2.text.includes('Ready'), r2.text);
+        await p.goto('https://www.chess.com/play/computer', { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await sleep(4000);
+        // Returning mid-game: chess.com shows the paused game with
+        // Continue / New Game controls (getPlayingAs() reports undefined while
+        // paused, so the bot correctly idles until the game resumes). Pressing
+        // "Continue" must resume analysis + auto-moves — that IS this phase.
+        R.resumeClick = await p.evaluate(() => {
+            const t = (b) => (b.textContent || '').trim();
+            const btns = Array.from(document.querySelectorAll('button')).filter((b) => b.offsetParent);
+            const cont = btns.find((b) => /^continue$/i.test(t(b)));
+            if (cont) { cont.click(); return 'Continue'; }
+            const ng = btns.find((b) => /^new game$/i.test(t(b)));
+            if (ng) { ng.click(); return 'New Game'; }
+            return null;
+        });
+        await sleep(2500);
+        if (R.resumeClick === 'New Game') {
+            // Fresh-game setup: start it via the panel's Play control.
+            await p.evaluate(() => {
+                const t = (b) => (b.textContent || '').trim();
+                const btns = Array.from(document.querySelectorAll('button')).filter((b) => b.offsetParent && !b.closest('header, nav'));
+                const pl = btns.find((b) => /^play$/i.test(t(b)));
+                if (pl) pl.click();
+            });
+            await sleep(3000);
+        }
+        const fens2 = [];
+        const g1 = Date.now();
+        while (Date.now() - g1 < 75000 && fens2.length < 4) {
+            const fen = await p.evaluate(() => {
+                const el = document.querySelector('chess-board, wc-chess-board');
+                return el && el.game && el.game.getFEN ? el.game.getFEN() : null;
+            });
+            if (fen && fens2[fens2.length - 1] !== fen) fens2.push(fen);
+            await p.waitForTimeout(1200);
+        }
+        R.stabilityGame = { clicked: R.resumeClick, positions: fens2.length };
+        check('stability: resume keeps playing after navigation', fens2.length >= 3, 'saw ' + fens2.length);
+    } catch (e) { check('stability: navigation recovery', false, String(e).slice(0, 150)); }
+
     check('no console errors', R.errors.length === 0, R.errors.slice(0, 3).join(' | '));
     check('no engine warnings', R.engineWarnings.length === 0, R.engineWarnings.slice(0, 3).join(' | '));
 

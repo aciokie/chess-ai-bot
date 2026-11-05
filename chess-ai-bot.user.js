@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.7.8
+// @version          11.7.9
 // @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -31,6 +31,25 @@
 // ==/UserScript==
 (function () {
     "use strict";
+    // --- DUPLICATE-INSTANCE GUARD (cross-world) ---
+    // A tab can end up running two bot instances: Chrome does not re-inject
+    // content scripts into already-open tabs when the extension is reloaded
+    // (the old instance keeps running), and userscript + extension can coexist.
+    // The marker lives on a DOM element — DOM attributes are the one channel
+    // shared by every JS world — so duplicates from any source are detected
+    // and skipped with a clear message.
+    try {
+        const _docEl = document.documentElement;
+        const _existing = _docEl && _docEl.getAttribute("data-sf-bot-active");
+        if (_existing) {
+            console.log(`[SF Engine] Another Chess AI Bot instance (v${_existing}) is already active on this page — skipping duplicate injection. If you just updated the bot/extension, refresh the tab (F5).`);
+            return;
+        }
+        if (_docEl) {
+            const _ver = (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) ? String(GM_info.script.version) : "?";
+            _docEl.setAttribute("data-sf-bot-active", _ver);
+        }
+    } catch (_e) { }
     // --- CONFIGURATION ---
     const CONFIG = {
         BOARD_SEL: "chess-board, wc-chess-board",
