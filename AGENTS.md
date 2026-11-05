@@ -5,7 +5,7 @@
 - Chess.com only: `@match` covers play/game/analysis/puzzles/daily pages; board selectors `chess-board, wc-chess-board`.
 - Engines are downloaded at runtime via ordered multi-source chains (unpkg → jsdelivr → this repo's GitHub release mirror); WASM bytes are SHA-256 pinned before caching. No WASM is committed to the repo. See registry below.
 - Browser extension build: `extension/` is a generated MV3 port of the userscript — all features, UI, and the H-panel keybind preserved; all 7 engines ship inside the extension. See "Browser Extension" below.
-- Auto-update: `@updateURL` / `@downloadURL` → raw.githubusercontent.com. **Bump `@version` on every push** (currently 11.7.5) or Tampermonkey won't detect the update.
+- Auto-update: `@updateURL` / `@downloadURL` → raw.githubusercontent.com. **Bump `@version` on every push** (currently 11.7.7) or Tampermonkey won't detect the update.
 - Only these GM APIs are granted: `GM_getResourceText`, `GM_getValue`, `GM_setValue`, `GM_xmlhttpRequest`, `GM_info`. The `@resource stockfish.js` (unpkg SF19 single JS) is used as the bundled loader JS for `sf19_00`.
 
 ## Commands

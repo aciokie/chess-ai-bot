@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.7.6
+// @version          11.7.7
 // @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -2440,7 +2440,7 @@ self.onmessage = function(e) {
                     console.log(`[SF Engine] ⤵ worker alive at ${Math.round((performance.now() - (state.engineBuildTime || performance.now())) / 1000)}s (compiling)`);
                 return;
             }
-            console.log(`[SF Engine] ⤵ worker probe: ${msg.slice(8)}`);
+            console.debug(`[SF Engine] ⤵ worker probe: ${msg.slice(8)}`);
             return;
         }
         // Log all engine messages for debugging
@@ -4935,6 +4935,16 @@ pvSettings: document.getElementById("pvSettings"),
     scheduleBackupPoll();
     startGameOverPoll();
     AntiDraw.start();
+    // --- STARTUP BANNER ---
+    // Which build is running? Makes it easy to distinguish userscript vs
+    // extension builds and to verify that an extension reload took effect.
+    try {
+        const _buildVer = (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) ? String(GM_info.script.version) : "?";
+        const _buildMode = (typeof GM_info !== "undefined" && GM_info.scriptHandler)
+            ? String(GM_info.scriptHandler)
+            : ((typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) ? "extension" : "userscript");
+        console.log(`[SF Engine] Chess AI Bot v${_buildVer} loaded (${_buildMode})`);
+    } catch (e) {}
     if (typeof GM_xmlhttpRequest === "function") {
         let ver = "";
         try { if (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) ver = String(GM_info.script.version); } catch (e) {}
