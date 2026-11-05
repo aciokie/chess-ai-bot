@@ -14,6 +14,7 @@ const FILES = [
     'engine-loading.unit.test.js',
     'worker-bootstrap.test.js',
     'mirror-workflow.test.js',
+    'extension.test.js',
 ];
 
 let failed = 0;

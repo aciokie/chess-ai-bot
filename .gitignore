@@ -1,0 +1,9 @@
+# Bundled engine binaries for the extension — fetched via:
+#   node extension/download-engines.mjs
+extension/engines/
+
+# Browser E2E artifacts (results + screenshots + throwaway profiles)
+extension/e2e-artifacts/
+
+# Playwright MCP scratch output
+.playwright-mcp/

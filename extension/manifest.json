@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Chess AI Bot — Stockfish Engine",
+  "version": "11.7.5",
+  "description": "Chess.com Stockfish assistant — full userscript port. All 7 engine models ship inside the extension: no downloads, instant compile & load.",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self'"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.chess.com/play/*",
+        "https://www.chess.com/game/*",
+        "https://www.chess.com/analysis",
+        "https://www.chess.com/analysis/*",
+        "https://www.chess.com/puzzles/*",
+        "https://www.chess.com/daily"
+      ],
+      "js": [
+        "src/gm-polyfill.js",
+        "src/bot.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "engines/*",
+        "engines/*/*",
+        "engines/sf19_small/stockfish-19-lite-single.js",
+        "engines/sf19_small/stockfish-19-lite-single.wasm",
+        "engines/sf19_00/stockfish-19-single.js",
+        "engines/sf19_00/stockfish-19-single.wasm",
+        "engines/sf18_05/stockfish-18-lite-single.js",
+        "engines/sf18_05/stockfish-18-lite-single.wasm",
+        "engines/sf16_00/stockfish-nnue-16-single.js",
+        "engines/sf16_00/stockfish-nnue-16-single.wasm",
+        "engines/sf11_00/stockfish.js",
+        "engines/sf11_00/stockfish.wasm",
+        "engines/sf10_02/stockfish.js",
+        "engines/sf9_00/stockfish.js"
+      ],
+      "matches": [
+        "https://www.chess.com/*"
+      ]
+    }
+  ]
+}

@@ -22,10 +22,27 @@ That's it! Open any Chess.com game and the engine appears automatically. ✅
 
 ---
 
+## 🧩 Browser Extension (no Tampermonkey needed)
+
+Prefer an extension? [`extension/`](extension/) is a full MV3 port of this script
+with **all features and the exact same UI** — plus all 7 Stockfish models shipped
+**inside the extension**, so the engine compiles and loads locally (no downloads,
+~0.2s to ready).
+
+**Install (unpacked):**
+
+1. `node extension/download-engines.mjs` (one-time, SHA-256 verified)
+2. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the `extension/` folder
+3. Open any Chess.com game — press **H** to show/hide the panel (it starts hidden)
+
+See [`extension/README.md`](extension/README.md) for details.
+
+---
+
 ## ✨ Features
 
 ### 🎯 Smart Analysis
-- **Real-time Stockfish 18** - Depth up to 30
+- **Real-time Stockfish** - 7 models, Stockfish 19.0.0 down to 9.0.0 (WASM + asm.js), depth up to 30
 - **Auto-moves** - Optional auto-play with human-like delays
 - **Opening book** - Instant opening moves (1000+ positions)
 - **Move highlights** - See best moves visually on the board
@@ -34,7 +51,7 @@ That's it! Open any Chess.com game and the engine appears automatically. ✅
 
 ### ⚡ Performance
 - **WASM Streaming** - 1-2s engine startup
-- **Multi-CDN fallback** - 99.9% successful WASM downloads (unpkg, jsdelivr, statically)
+- **Multi-source engine downloads** - unpkg → jsdelivr → self-hosted GitHub release mirror, SHA-256 verified
 - **IndexedDB caching** - No re-download on page reload
 - **Memoized board access** - Efficient board monitoring
 

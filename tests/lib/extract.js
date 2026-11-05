@@ -79,10 +79,12 @@ function extractConstArray(src, name) {
     return extractBalanced(src, i);
 }
 
-// Parse LOCAL_ENGINES (pure data) out of the userscript.
-function parseRegistry(src) {
+// Parse LOCAL_ENGINES out of a script. The extension build's registry contains
+// extURL(...) calls, so a sandbox with an extURL stub can be supplied.
+function parseRegistry(src, sandbox) {
     const text = extractConstArray(src || readUserscript(), 'LOCAL_ENGINES');
-    return vm.runInNewContext('(' + text + ')');
+    const context = Object.assign({ extURL: (p) => 'EXT:' + p }, sandbox || {});
+    return vm.runInNewContext('(' + text + ')', context);
 }
 
 module.exports = { USERSCRIPT, readUserscript, extractBalanced, extractFunction, extractConstArray, parseRegistry };

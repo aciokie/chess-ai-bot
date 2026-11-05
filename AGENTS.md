@@ -4,6 +4,7 @@
 - Single-file Tampermonkey/Violentmonkey userscript: `chess-ai-bot.user.js` (~287KB, ~5000 lines). No build step, no package.json, no lint config.
 - Chess.com only: `@match` covers play/game/analysis/puzzles/daily pages; board selectors `chess-board, wc-chess-board`.
 - Engines are downloaded at runtime via ordered multi-source chains (unpkg → jsdelivr → this repo's GitHub release mirror); WASM bytes are SHA-256 pinned before caching. No WASM is committed to the repo. See registry below.
+- Browser extension build: `extension/` is a generated MV3 port of the userscript — all features, UI, and the H-panel keybind preserved; all 7 engines ship inside the extension. See "Browser Extension" below.
 - Auto-update: `@updateURL` / `@downloadURL` → raw.githubusercontent.com. **Bump `@version` on every push** (currently 11.7.5) or Tampermonkey won't detect the update.
 - Only these GM APIs are granted: `GM_getResourceText`, `GM_getValue`, `GM_setValue`, `GM_xmlhttpRequest`, `GM_info`. The `@resource stockfish.js` (unpkg SF19 single JS) is used as the bundled loader JS for `sf19_00`.
 
@@ -11,7 +12,8 @@
 - Syntax check (the closest thing to a lint): `node --check chess-ai-bot.user.js`
 - **ALWAYS PUSH WHEN DONE — standing repo rule**: every completed task must be committed and pushed to `main` (`git push origin main`) without waiting to be asked; unpushed work is not done. Bump `@version` whenever the userscript changed. Never force-push or rewrite pushed history.
 - Releases: for engine-file or release-worthy changes, also push a `v*` tag matching `@version` — it publishes the **engine mirror release** (`.github/workflows/release-engine-mirror.yml`): downloads, hash-verifies and republishes existing CDN engine files as release assets (no compilation involved). Pushing `main` alone triggers no CI.
-- Tests (offline, zero deps): `node tests/run-all.js` runs registry structure, download-integrity units, the worker-bootstrap simulation, and the mirror-workflow cross-check. Individual files run directly (`node tests/<file>.js`). Live CDN + pinned-hash verification (~120 MB download): `node tests/verify-engine-sources.js` (options: `--quick`, `--model=<id>`).
+- Tests (offline, zero deps): `node tests/run-all.js` runs registry structure, download-integrity units, the worker-bootstrap simulation, the mirror-workflow cross-check, and the extension parity checks. Individual files run directly (`node tests/<file>.js`). Live CDN + pinned-hash verification (~120 MB download): `node tests/verify-engine-sources.js` (options: `--quick`, `--model=<id>`).
+- Extension: `node extension/build.mjs` regenerates `extension/src/bot.js` from the userscript (never edit it directly; `--check` verifies sync). `node extension/download-engines.mjs` fetches + hash-verifies the bundled engine files (git-ignored).
 - Legacy: `tests/userscript-test.spec.js` is a Playwright smoke test. No package.json — install ad hoc (`npm i -D @playwright/test && npx playwright install chromium`); test 2 assumes a manually logged-in Chess.com session.
 
 ## Engine Loading (the part that bites)
@@ -25,6 +27,13 @@
 - Settings: global `bot_<key>`, per-model `m_<modelId>_<key>` (hydrated into the `settings.local*` working copies by `loadModelSettings()`). `engineMode` is forced to `"local"` at startup.
 - Turn gating: analysis and auto-move only run when `isOurTurnNow()`; FEN comes from `state.board.game.getFEN()` via `getRawBoardFEN()`. Board reads are memoized with a 2-5s backup poll.
 - Anti-cheat: after every 12-25 analysis ticks `shouldPauseAnalysis()` skips 0.7-2.5s (disabled in bulletMode).
+
+## Browser Extension (extension/)
+- `extension/src/bot.js` is GENERATED from the userscript by `extension/build.mjs` — the transforms are additive only (header, `extURL()` helper, bundled sources, bundled fast paths). Byte-identical regeneration, identical element ids/settings, the H keybind, and feature markers are enforced by `tests/extension.test.js`. Edit the userscript, then rebuild.
+- All 7 engines are bundled in `extension/engines/<model>/` (git-ignored; fetch via `extension/download-engines.mjs`, SHA-256 pinned to the same hashes as the userscript/mirror). Engine load order: direct extension-file worker (only where the browser allows it) → the normal fetch/compile pipeline reading the extension files locally via the GM shim (no network) → the CDN chain as last resort.
+- `src/gm-polyfill.js` shims the GM_* APIs on localStorage (`cabe_ext_*` keys) + fetch. Panel behavior is preserved exactly: starts hidden, **H toggles**, ✕ hides, Alt+B toggles bullet mode.
+- Real-browser E2E: `node extension/e2e-test.mjs` (needs a Playwright install via `--playwright=<path>`/env; auto-discovers Chromium/Brave/Edge) — verifies panel injection on live Chess.com, the H keybind, bundled local engine load (no CDN), a model switch, and the cached reload. Artifacts in `extension/e2e-artifacts/` (git-ignored). Gotchas it encodes: strip Playwright's default `--disable-extensions`; chess.com's own modal overlays intercept pointer events, so button checks use DOM clicks.
+- Manifest notes: CSP needs `'wasm-unsafe-eval'`; **never add `blob:` to `worker-src`** — it makes Chrome silently refuse to load the entire extension (verified by manifest bisect; content-script blob workers work without it). Engine files must remain listed in `web_accessible_resources`.
 
 ## Model Registry (LOCAL_ENGINES)
 | id | label | format | maxDepth | hasNNUE | hasSlowMover | hasWDL | hasContempt | hasMinThink | hasRepetition |
@@ -61,7 +70,8 @@ All models have Skill Level, Hash, and Move Overhead. `format: "asmjs"` models h
 | Auto-move not working | Not your turn, or `autoMove` disabled | Check `isOurTurnNow()` logic and settings |
 
 ## Repo Map (beyond the userscript)
-- `tests/run-all.js` — offline test suite (registry, download-integrity units, bootstrap simulation, mirror-workflow cross-check); `tests/verify-engine-sources.js` — live CDN + SHA-256 verifier; `tests/lib/extract.js` — shared source-extraction helpers; `tests/userscript-test.spec.js` — legacy Playwright smoke
+- `tests/run-all.js` — offline test suite (registry, download-integrity units, bootstrap simulation, mirror-workflow cross-check, extension parity); `tests/verify-engine-sources.js` — live CDN + SHA-256 verifier; `tests/lib/extract.js` — shared source-extraction helpers; `tests/userscript-test.spec.js` — legacy Playwright smoke
+- `extension/` — generated MV3 browser-extension build of the userscript with bundled engines (see the Browser Extension section); `extension/README.md` covers install/build; `extension/engines/` is git-ignored
 - `.github/workflows/release-engine-mirror.yml` — on `v*` tags: downloads, hash-verifies and republishes the engine files as release assets (the userscript's `github`/`mirror` sources). Hashes there are cross-checked against the userscript by `tests/mirror-workflow.test.js`
 - `README.md` — user-facing docs; version/badges lag behind the userscript
 - History note: a custom SF19 WASM build pipeline (`build-sf19*.yml`, `src/glue.cpp`, `BUILD.md`, …) was removed in v11.7.5 — it never compiled (its glue targeted APIs absent from the `sf_19` branch). If revived, port the glue from `lichess-org/stockfish-web`.
