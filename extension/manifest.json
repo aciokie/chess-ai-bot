@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chess AI Bot — Stockfish Engine",
-  "version": "11.8.0",
+  "version": "11.8.1",
   "description": "Chess.com Stockfish assistant — full userscript port. All 7 engine models ship inside the extension: no downloads, instant compile & load.",
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self'"

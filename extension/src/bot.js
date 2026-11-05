@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.8.0
+// @version          11.8.1
 // @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -314,6 +314,8 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         currentSearchFEN: "",
         pendingAbortEchoes: 0,
         lastSanitizedBoardFEN: "",
+        lastCompletedAnalysisFEN: "",
+        _stallHealAt: 0,
         lastMoveResult: "Waiting for analysis...",
         lastLiveResult: "Depth | Evaluation: Best move will appear here.",
         lastPayload: "N/A",
@@ -2679,6 +2681,10 @@ self.onmessage = function(e) {
         }
     }
     function processBestMove(bestMove, evalScore, mate, continuationArr, winChance, duration, depth = null, isFinal = false, fen = null) {
+        // Completion marker for the stall self-heal in checkAndAnalyze(): this
+        // exact position produced a real result (engine or opening book), so it
+        // is not "stalled".
+        if (fen) state.lastCompletedAnalysisFEN = fen;
         state.currentBestMove = bestMove;
         state.currentPV = continuationArr || (bestMove ? [bestMove] : []);
         if (isFinal || !state.isThinking) { Visuals.add(bestMove, 'history'); PV.clear(); }
@@ -2887,10 +2893,12 @@ self.onmessage = function(e) {
         try {
             const turn = state.board.game.getTurn();
             const playingAs = state.board.game.getPlayingAs();
-            // Normalize: handle both number (1/2) and string ("w"/"b") returns
-            const turnNum = (turn === 1 || turn === "w" || turn === "white") ? 1 : 2;
-            const paNum = (playingAs === 1 || playingAs === "w" || playingAs === "white") ? 1 : 2;
-            return turnNum === paNum;
+            // Normalize numbers and side strings; undefined/invalid on either
+            // side means "not our turn" (board still initializing or paused) —
+            // the old undefined->2 fallback made undefined===undefined "our turn".
+            const sideOf = (v) => (v === 1 || v === "1" || v === "w" || v === "white") ? 1 : ((v === 2 || v === "2" || v === "b" || v === "black") ? 2 : 0);
+            const turnNum = sideOf(turn), paNum = sideOf(playingAs);
+            return turnNum !== 0 && paNum !== 0 && turnNum === paNum;
         } catch(e) {}
         return false;
     };
@@ -4780,6 +4788,14 @@ pvSettings: document.getElementById("pvSettings"),
         state.localDepth = null;
         state.lastSentFEN = "";
         state.currentSearchFEN = "";
+        // Critical: re-arm the auto-analysis trigger. Without this, a new game
+        // whose position equals the last analyzed one (startpos after an
+        // aborted/instant rematch) silently matched the analyze-trigger dedupe
+        // (clean !== lastSanitizedBoardFEN) and all automation died until a
+        // manual Analyze click.
+        state.lastSanitizedBoardFEN = "";
+        state.lastCompletedAnalysisFEN = "";
+        state._stallHealAt = 0;
         state.lastMoveResult = "N/A";
         if (state.pendingAnalysis) { clearTimeout(state.pendingAnalysis); state.pendingAnalysis = null; }
         if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
@@ -4836,7 +4852,14 @@ pvSettings: document.getElementById("pvSettings"),
             state.lastSeenFEN = clean;
             const tn = state.board.game.getTurn();
             const pn = state.board.game.getPlayingAs();
-            const isTurn = (tn === 1 || tn === "w" || tn === "white") === (pn === 1 || pn === "w" || pn === "white");
+            // Strict side resolution: while the board is still initializing both
+            // can be undefined — the old comparison treated undefined===undefined
+            // as "our turn", dispatched an analysis and burned the FEN dedupe
+            // (seeding lastSanitizedBoardFEN before the game was live), after
+            // which the real position never got analyzed.
+            const sideOf = (v) => (v === 1 || v === "1" || v === "w" || v === "white") ? 1 : ((v === 2 || v === "2" || v === "b" || v === "black") ? 2 : 0);
+            const side = sideOf(tn), mySide = sideOf(pn);
+            const isTurn = side !== 0 && mySide !== 0 && side === mySide;
             if (state.premovePending && !isTurn) {
                 if (settings.bulletMode && state.premovePV.length > 0 && state.premovePVIndex < state.premovePV.length) {
                     const nextUci = state.premovePV[state.premovePVIndex];
@@ -4867,6 +4890,21 @@ pvSettings: document.getElementById("pvSettings"),
                         }
                     }, glanceMs);
                 }
+            }
+            // Stall self-heal: it's our turn and this exact position is flagged as
+            // "already analyzed" (so the gate above can never fire) but no
+            // analysis ever completed for it — the marker was seeded while the
+            // board was still initializing, or a dispatched search never
+            // returned. Force an analysis so automation can't silently die until
+            // the user presses Analyze (throttled; engine-ready only).
+            if (isTurn && !state.isThinking && !state.pendingAnalysis
+                && clean === state.lastSanitizedBoardFEN
+                && clean !== (state.lastCompletedAnalysisFEN || "")
+                && state.localEngine && state.engineStatus === "ready"
+                && performance.now() - (state._stallHealAt || 0) > 6000) {
+                state._stallHealAt = performance.now();
+                console.log(`[SF Engine] analysis stall healed: forcing analyze on ${clean.split(" ")[0]}`);
+                try { analyze(settings.depth); } catch (e) { console.error(`[SF Engine] stall self-heal analyze failed:`, e); }
             }
         }
         if (!state.ui.panel) createUI();

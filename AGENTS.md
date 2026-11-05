@@ -5,7 +5,7 @@
 - Chess.com only: `@match` covers play/game/analysis/puzzles/daily pages; board selectors `chess-board, wc-chess-board`.
 - Engines are downloaded at runtime via ordered multi-source chains (unpkg → jsdelivr → this repo's GitHub release mirror); WASM bytes are SHA-256 pinned before caching. No WASM is committed to the repo. See registry below.
 - Browser extension build: `extension/` is a generated MV3 port of the userscript — all features, UI, and the H-panel keybind preserved; all 7 engines ship inside the extension. See "Browser Extension" below.
-- Auto-update: `@updateURL` / `@downloadURL` → raw.githubusercontent.com. **Bump `@version` on every push** (currently 11.8.0) or Tampermonkey won't detect the update.
+- Auto-update: `@updateURL` / `@downloadURL` → raw.githubusercontent.com. **Bump `@version` on every push** (currently 11.8.1) or Tampermonkey won't detect the update.
 - Only these GM APIs are granted: `GM_getResourceText`, `GM_getValue`, `GM_setValue`, `GM_xmlhttpRequest`, `GM_info`. The `@resource stockfish.js` (unpkg SF19 single JS) is used as the bundled loader JS for `sf19_00`.
 
 ## Commands
@@ -58,7 +58,7 @@ All models have Skill Level, Hash, and Move Overhead. `format: "asmjs"` models h
 - Bump `MODULE_CACHE_VERSION` (currently 1) when changing the worker bootstrap so stale compiled modules are discarded.
 
 ## Debugging
-- All logs are prefixed `[SF Engine]`. Markers: `loadLocalEngine START`, `Download attempt N/M via <label>`, `Source <label> failed`, `All download sources failed`, `Received uciok`, `Engine ready in Xs`, `Auto-heal: cache looks corrupted`, `engine alive at Xs, still initializing`, `heartbeat miss N/6`.
+- All logs are prefixed `[SF Engine]`. Markers: `loadLocalEngine START`, `Download attempt N/M via <label>`, `Source <label> failed`, `All download sources failed`, `Received uciok`, `Engine ready in Xs`, `Auto-heal: cache looks corrupted`, `engine alive at Xs, still initializing`, `heartbeat miss N/6`, `analysis stall healed: forcing analyze` (the analyze-trigger self-heal fired), `Auto-rematch: clicked "..."` / `Auto-rematch: accepted incoming rematch offer`.
 - `state` and `settings` are IIFE-scoped — not reachable from the page console. Toggle "Debug logs" in the script UI to enable the gated `log()` output.
 - `node --check` only catches syntax errors; runtime issues surface in the Chess.com console.
 
@@ -72,6 +72,7 @@ All models have Skill Level, Hash, and Move Overhead. `format: "asmjs"` models h
 | Auto-move not working | Not your turn, or `autoMove` disabled | Check `isOurTurnNow()` logic and settings |
 | Auto-rematch never starts a game | Pre-11.8.0 logic only *accepted* offers and its modal selectors are gone from the current site | v11.8.0 `attemptRematch()` clicks Rematch → Play Again → New Game (`clickInitiateRematch`); game over = `.game-over-modal-shell-container` |
 | Incoming rematch gets auto-declined | Anti-draw `declineDrawOffer()` blindly clicked any "Decline" button (including rematch dialogs) | v11.8.0 never declines rematch dialogs — it accepts them when Auto-Rematch is on, else leaves them |
+| Automation does nothing until "Analyze" is clicked manually | The analyze-trigger dedupe (`clean !== lastSanitizedBoardFEN`) got seeded without a real analysis: new-game reset didn't clear it when the new position equals the old one (startpos after instant/aborted rematch), and `undefined===undefined` turn values counted as "our turn" while the board initialized | v11.8.1 clears the FEN dedupe + completion marker in `resetTransientStateForNewGame()`, strict side resolution in `checkAndAnalyze`/`isOurTurnNow` (undefined ≠ our turn), and a throttled stall self-heal that force-analyzes when the gate is provably wedged |
 
 ## Repo Map (beyond the userscript)
 - `tests/run-all.js` — offline test suite (registry, download-integrity units, bootstrap simulation, mirror-workflow cross-check, extension parity); `tests/verify-engine-sources.js` — live CDN + SHA-256 verifier; `tests/lib/extract.js` — shared source-extraction helpers; `tests/userscript-test.spec.js` — legacy Playwright smoke

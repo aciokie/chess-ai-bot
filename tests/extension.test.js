@@ -157,7 +157,7 @@ check('all major feature markers present', () => {
         'resetTransientStateForNewGame', 'startGameOverPoll', 'setupBoardObserver',
         'OpeningBook.enabled', 'ThreatDetector.enabled', 'humanizer', 'autoRematch',
         'clickInitiateRematch', 'clickAcceptRematch', '_rematchDialogText', 'game-over-modal-shell-container',
-        'never click Decline',
+        'never click Decline', 'lastCompletedAnalysisFEN', 'analysis stall healed',
         'premovePending', 'EvalBar.update', 'TRACK_URL', 'GM_info',
         'engineHealMap', 'purgeModelCache', 'sha256Hex', 'downloadFromNextSource',
         'localModelSel', 'inpDepth', 'chkMove', 'chkRun', 'chkQueue',
