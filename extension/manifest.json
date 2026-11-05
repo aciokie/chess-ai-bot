@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chess AI Bot — Stockfish Engine",
-  "version": "11.7.7",
+  "version": "11.7.8",
   "description": "Chess.com Stockfish assistant — full userscript port. All 7 engine models ship inside the extension: no downloads, instant compile & load.",
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self'"
@@ -17,9 +17,25 @@
         "https://www.chess.com/daily"
       ],
       "js": [
+        "src/ext-urls.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.chess.com/play/*",
+        "https://www.chess.com/game/*",
+        "https://www.chess.com/analysis",
+        "https://www.chess.com/analysis/*",
+        "https://www.chess.com/puzzles/*",
+        "https://www.chess.com/daily"
+      ],
+      "js": [
+        "src/ext-urls.js",
         "src/gm-polyfill.js",
         "src/bot.js"
       ],
+      "world": "MAIN",
       "run_at": "document_idle"
     }
   ],

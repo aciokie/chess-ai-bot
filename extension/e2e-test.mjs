@@ -199,6 +199,35 @@ const WALK_SHADOW = `(() => { const w = (root) => { let t = root.textContent || 
     check('reload uses cache path', R.console.join('\n').includes('cached PATCHED worker') || R.console.join('\n').includes('cached'));
     check('engine ready after reload', R.engine3.text.includes('Ready'), R.engine3.text);
 
+    // 5. real game: the extension must analyze and auto-play vs the computer.
+    //    (MAIN-world build — the isolated-world build could not see board.game
+    //    and silently did nothing in live games.)
+    try {
+        await p.goto('https://www.chess.com/play/computer', { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await sleep(4000);
+        await p.evaluate(() => {
+            const b = Array.from(document.querySelectorAll('button')).find((x) => /^play$/i.test((x.textContent || '').trim()) && x.offsetParent);
+            if (b) b.click();
+        });
+        await sleep(4000);
+        const fens = [];
+        const g0 = Date.now();
+        while (Date.now() - g0 < 75000 && fens.length < 5) {
+            const fen = await p.evaluate(() => {
+                const el = document.querySelector('chess-board, wc-chess-board');
+                return el && el.game && el.game.getFEN ? el.game.getFEN() : null;
+            });
+            if (fen && fens[fens.length - 1] !== fen) fens.push(fen);
+            await p.waitForTimeout(1200);
+        }
+        R.game = { distinctPositions: fens.length, fens: fens.slice(0, 5).map((f) => f.slice(0, 32)) };
+        const C2 = R.console.join('\n');
+        check('game: extension analyzed positions', C2.includes('analyzeLocal called'));
+        check('game: engine produced bestmoves', C2.includes('bestmove'));
+        check('game: auto-move played (>= 3 positions reached)', fens.length >= 3, 'saw ' + fens.length);
+        try { await p.screenshot({ path: path.join(ARTIFACTS, 'e2e-game-screenshot.png') }); } catch (e) { }
+    } catch (e) { check('real game ran', false, String(e).slice(0, 150)); }
+
     check('no console errors', R.errors.length === 0, R.errors.slice(0, 3).join(' | '));
     check('no engine warnings', R.engineWarnings.length === 0, R.engineWarnings.slice(0, 3).join(' | '));
 

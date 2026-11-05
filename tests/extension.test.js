@@ -51,18 +51,31 @@ check('version matches the userscript @version', () => {
     assert(m, 'userscript version not found');
     assert(m[1] === manifest.version, `manifest ${manifest.version} != userscript ${m[1]}`);
 });
-check('content scripts: shim-before-bot load order, document_idle', () => {
+check('content scripts: dual-world setup with correct order', () => {
     const cs = manifest.content_scripts;
-    assert(Array.isArray(cs) && cs.length === 1, 'expected exactly one content script entry');
-    assert(JSON.stringify(cs[0].js) === JSON.stringify(['src/gm-polyfill.js', 'src/bot.js']),
-        'shim must load before bot.js: ' + JSON.stringify(cs[0].js));
-    assert(cs[0].run_at === 'document_idle', 'run_at must be document_idle');
+    assert(Array.isArray(cs) && cs.length === 2, 'expected two content script entries (isolated + MAIN)');
+    const iso = cs.find((c) => !c.world || c.world === 'ISOLATED');
+    const main = cs.find((c) => c.world === 'MAIN');
+    assert(iso && main, 'missing isolated or MAIN entry');
+    // The MAIN world is the only world where chess.com's board.game is visible.
+    assert(JSON.stringify(iso.js) === JSON.stringify(['src/ext-urls.js']), 'isolated entry: ' + JSON.stringify(iso.js));
+    assert(iso.run_at === 'document_start', 'isolated entry must run at document_start');
+    assert(JSON.stringify(main.js) === JSON.stringify(['src/ext-urls.js', 'src/gm-polyfill.js', 'src/bot.js']),
+        'MAIN entry order: ' + JSON.stringify(main.js));
+    assert(main.run_at === 'document_idle', 'MAIN entry must run at document_idle');
 });
-check('content script matches == userscript @match list', () => {
+check('content script matches == userscript @match list (both entries)', () => {
     const matches = [...us.matchAll(/^\/\/ @match\s+(\S+)$/gm)].map((m) => m[1]).sort();
-    const manifestMatches = [...manifest.content_scripts[0].matches].sort();
-    assert(JSON.stringify(matches) === JSON.stringify(manifestMatches),
-        `userscript: ${matches}\nmanifest:   ${manifestMatches}`);
+    for (const cs of manifest.content_scripts) {
+        const manifestMatches = [...cs.matches].sort();
+        assert(JSON.stringify(matches) === JSON.stringify(manifestMatches),
+            `entry ${cs.world || 'ISOLATED'}: ${manifestMatches}`);
+    }
+});
+check('extURL resolves via the shared DOM attribute (MAIN-world safe)', () => {
+    assert(bot.includes('data-sf-ext-base'), 'extURL does not read the DOM bridge attribute');
+    const urls = fs.readFileSync(path.join(EXT, 'src', 'ext-urls.js'), 'utf8');
+    assert(urls.includes('setAttribute(\'data-sf-ext-base\''), 'ext-urls.js does not publish the base attribute');
 });
 check('CSP allows wasm compilation + extension-file workers', () => {
     const csp = manifest.content_security_policy && manifest.content_security_policy.extension_pages;

@@ -60,7 +60,7 @@ export function buildBotScript(sourceText) {
     // 2. extURL() helper right after the IIFE opens.
     text = replaceOnce(text,
         '(function () {\n    "use strict";\n',
-        '(function () {\n    "use strict";\n\n    // ── Extension build ──────────────────────────────────────────────────────\n    // Engine files ship inside the extension (engines/<model>/...); extURL()\n    // resolves them at runtime. Everything else is the unmodified userscript.\n    const extURL = (p) => (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) ? chrome.runtime.getURL(p) : p;\n',
+        '(function () {\n    "use strict";\n\n    // ── Extension build ──────────────────────────────────────────────────────\n    // Engine files ship inside the extension (engines/<model>/...); extURL()\n    // resolves them at runtime. This build runs in the MAIN world (the only\n    // world where chess.com\'s board.game object is visible), where chrome.*\n    // is unavailable — so the base URL comes from a DOM attribute published\n    // by the isolated ext-urls.js. DOM attributes are shared across worlds.\n    const extURL = (p) => {\n        try {\n            const el = document.documentElement;\n            const base = el && el.getAttribute && el.getAttribute("data-sf-ext-base");\n            if (base) return base + p;\n        } catch (e) { }\n        return (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) ? chrome.runtime.getURL(p) : p;\n    };\n',
         'extURL helper');
 
     // 3. Prepend the `bundled` source to every model's source chain.

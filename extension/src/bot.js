@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.7.7
+// @version          11.7.8
 // @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -38,8 +38,18 @@
 
     // ── Extension build ──────────────────────────────────────────────────────
     // Engine files ship inside the extension (engines/<model>/...); extURL()
-    // resolves them at runtime. Everything else is the unmodified userscript.
-    const extURL = (p) => (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) ? chrome.runtime.getURL(p) : p;
+    // resolves them at runtime. This build runs in the MAIN world (the only
+    // world where chess.com's board.game object is visible), where chrome.*
+    // is unavailable — so the base URL comes from a DOM attribute published
+    // by the isolated ext-urls.js. DOM attributes are shared across worlds.
+    const extURL = (p) => {
+        try {
+            const el = document.documentElement;
+            const base = el && el.getAttribute && el.getAttribute("data-sf-ext-base");
+            if (base) return base + p;
+        } catch (e) { }
+        return (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) ? chrome.runtime.getURL(p) : p;
+    };
     // --- CONFIGURATION ---
     const CONFIG = {
         BOARD_SEL: "chess-board, wc-chess-board",
