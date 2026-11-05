@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.7.5
+// @version          11.7.6
 // @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -1957,7 +1957,7 @@ self.onmessage = function(e) {
                     : [{ label: m.cdn || "cdn", js: m.jsUrl }]; // legacy shape
 
                 // ── Extension build: bundled asm.js fast path ──
-                if (asmSources[0] && asmSources[0].bundled) {
+                if (!state.bundledWorkerDirectBlocked && asmSources[0] && asmSources[0].bundled) {
                     console.log(`[SF Engine] Extension build: loading bundled asm.js engine directly (no download)...`);
                     setEngineStatus("loading", "Loading bundled engine...");
                     try {
@@ -1968,7 +1968,8 @@ self.onmessage = function(e) {
                         finalizeEngine(modelId);
                         return;
                     } catch (e) {
-                        console.warn(`[SF Engine] Direct bundled asm.js worker blocked (${e.message || e}); using the local fetch pipeline...`);
+                        state.bundledWorkerDirectBlocked = true;
+                        console.debug(`[SF Engine] Direct bundled asm.js worker blocked in this browser (${e.message || e}); using the local fetch pipeline...`);
                     }
                 }
                 const tryAsmSource = (idx) => {
@@ -2058,7 +2059,7 @@ self.onmessage = function(e) {
                 // created directly from the packaged file: no download, no
                 // blob bootstrap, no fetch mock. The engine JS runs as a
                 // worker and loads its own .wasm sibling (proven layout).
-                if (sources[0] && sources[0].bundled) {
+                if (!state.bundledWorkerDirectBlocked && sources[0] && sources[0].bundled) {
                     console.log(`[SF Engine] Extension build: loading bundled engine directly (no download)...`);
                     setEngineStatus("loading", "Loading bundled engine...");
                     try {
@@ -2069,7 +2070,8 @@ self.onmessage = function(e) {
                         finalizeEngine(modelId);
                         return;
                     } catch (e) {
-                        console.warn(`[SF Engine] Direct bundled worker blocked (${e.message || e}); using the local fetch pipeline...`);
+                        state.bundledWorkerDirectBlocked = true;
+                        console.debug(`[SF Engine] Direct bundled worker blocked in this browser (${e.message || e}); using the local fetch pipeline...`);
                     }
                 }
 
@@ -2464,7 +2466,9 @@ self.onmessage = function(e) {
         }
         const msg = typeof e.data === "string" ? e.data : (e.data?.toString ? e.data.toString() : null);
         if (!msg || typeof msg !== "string") {
-            console.warn(`[SF Engine] Received non-string message:`, e.data);
+            // Benign: the engine occasionally posts empty/non-string payloads
+            // during startup. Only note genuinely odd payloads, and quietly.
+            if (e.data) console.debug(`[SF Engine] Received non-string message:`, e.data);
             return;
         }
         if (msg.startsWith("__probe:module-instantiate-failed")) {
@@ -2859,22 +2863,22 @@ self.onmessage = function(e) {
     };
 
 function triggerAutoMove(fen = null) {
-     if (!state.currentBestMove || !state.board?.game) { console.warn(`[SF Engine] triggerAutoMove aborted: no bestMove or no board`); return; }
+     if (!state.currentBestMove || !state.board?.game) { console.debug(`[SF Engine] triggerAutoMove aborted: no bestMove or no board`); return; }
      const tn = state.board.game.getTurn();
      const pa = state.board.game.getPlayingAs();
      const turnNum = (tn === 1 || tn === "w" || tn === "white") ? 1 : 2;
      const paNum = (pa === 1 || pa === "w" || pa === "white") ? 1 : 2;
-     if (turnNum !== paNum) { console.warn(`[SF Engine] triggerAutoMove aborted: not our turn (turn=${turnNum}, playingAs=${paNum})`); return; }
+     if (turnNum !== paNum) { console.debug(`[SF Engine] triggerAutoMove aborted: not our turn (turn=${turnNum}, playingAs=${paNum})`); return; }
 
      // Race condition guard: verify the board hasn't changed since THIS analysis
      // started. `fen` is the exact position this move was computed for (captured
      // at dispatch), NOT the shared lastSentFEN — a newer analyze() overwrites
      // lastSentFEN, which let stale final callbacks stroke the wrong squares.
      const analyzedFEN = fen || state.lastSentFEN;
-     if (!analyzedFEN) { console.warn(`[SF Engine] triggerAutoMove aborted: no analyzed FEN`); return; }
+     if (!analyzedFEN) { console.debug(`[SF Engine] triggerAutoMove aborted: no analyzed FEN`); return; }
      const currentRaw = getRawBoardFEN();
      if (currentRaw && sanitizeFEN(currentRaw).split(" ")[0] !== analyzedFEN.split(" ")[0]) {
-         console.warn(`[SF Engine] triggerAutoMove aborted: board changed since analysis (analyzed=${analyzedFEN.split(" ")[0]}, current=${sanitizeFEN(currentRaw).split(" ")[0]})`);
+         console.debug(`[SF Engine] triggerAutoMove aborted: board changed since analysis (analyzed=${analyzedFEN.split(" ")[0]}, current=${sanitizeFEN(currentRaw).split(" ")[0]})`);
          return;
      }
 

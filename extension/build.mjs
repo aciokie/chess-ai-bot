@@ -88,7 +88,7 @@ export function buildBotScript(sourceText) {
         '                // created directly from the packaged file: no download, no\n' +
         '                // blob bootstrap, no fetch mock. The engine JS runs as a\n' +
         '                // worker and loads its own .wasm sibling (proven layout).\n' +
-        '                if (sources[0] && sources[0].bundled) {\n' +
+        '                if (!state.bundledWorkerDirectBlocked && sources[0] && sources[0].bundled) {\n' +
         '                    console.log(`[SF Engine] Extension build: loading bundled engine directly (no download)...`);\n' +
         '                    setEngineStatus("loading", "Loading bundled engine...");\n' +
         '                    try {\n' +
@@ -99,7 +99,8 @@ export function buildBotScript(sourceText) {
         '                        finalizeEngine(modelId);\n' +
         '                        return;\n' +
         '                    } catch (e) {\n' +
-        '                        console.warn(`[SF Engine] Direct bundled worker blocked (${e.message || e}); using the local fetch pipeline...`);\n' +
+        '                        state.bundledWorkerDirectBlocked = true;\n' +
+        '                        console.debug(`[SF Engine] Direct bundled worker blocked in this browser (${e.message || e}); using the local fetch pipeline...`);\n' +
         '                    }\n' +
         '                }\n',
         'wasm bundled fast path');
@@ -110,7 +111,7 @@ export function buildBotScript(sourceText) {
         ': [{ label: m.cdn || "cdn", js: m.jsUrl }]; // legacy shape\n' +
         '\n' +
         '                // ── Extension build: bundled asm.js fast path ──\n' +
-        '                if (asmSources[0] && asmSources[0].bundled) {\n' +
+        '                if (!state.bundledWorkerDirectBlocked && asmSources[0] && asmSources[0].bundled) {\n' +
         '                    console.log(`[SF Engine] Extension build: loading bundled asm.js engine directly (no download)...`);\n' +
         '                    setEngineStatus("loading", "Loading bundled engine...");\n' +
         '                    try {\n' +
@@ -121,7 +122,8 @@ export function buildBotScript(sourceText) {
         '                        finalizeEngine(modelId);\n' +
         '                        return;\n' +
         '                    } catch (e) {\n' +
-        '                        console.warn(`[SF Engine] Direct bundled asm.js worker blocked (${e.message || e}); using the local fetch pipeline...`);\n' +
+        '                        state.bundledWorkerDirectBlocked = true;\n' +
+        '                        console.debug(`[SF Engine] Direct bundled asm.js worker blocked in this browser (${e.message || e}); using the local fetch pipeline...`);\n' +
         '                    }\n' +
         '                }\n',
         'asmjs bundled fast path');

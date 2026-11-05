@@ -77,7 +77,7 @@ const PROFILE = path.join(ARTIFACTS, 'profile-' + Date.now());
 const SHOT = path.join(ARTIFACTS, 'e2e-screenshot.png');
 const RESULTS = path.join(ARTIFACTS, 'e2e-results.json');
 
-const R = { startedAt: new Date().toISOString(), browser: BROWSER, steps: [], console: [], errors: [] };
+const R = { startedAt: new Date().toISOString(), browser: BROWSER, steps: [], console: [], errors: [], engineWarnings: [] };
 let failures = 0;
 function check(name, ok, detail) {
     if (ok) console.log('  PASS  ' + name);
@@ -112,6 +112,7 @@ const WALK_SHADOW = `(() => { const w = (root) => { let t = root.textContent || 
         const t = m.text();
         if (t.includes('[SF Engine]')) R.console.push(t.slice(0, 220));
         if (m.type() === 'error') R.errors.push(t.slice(0, 200));
+        if (m.type() === 'warning' && t.includes('[SF Engine]')) R.engineWarnings.push(t.slice(0, 200));
     });
     p.on('pageerror', (e) => R.errors.push('PAGEERROR ' + String(e).slice(0, 200)));
 
@@ -199,6 +200,7 @@ const WALK_SHADOW = `(() => { const w = (root) => { let t = root.textContent || 
     check('engine ready after reload', R.engine3.text.includes('Ready'), R.engine3.text);
 
     check('no console errors', R.errors.length === 0, R.errors.slice(0, 3).join(' | '));
+    check('no engine warnings', R.engineWarnings.length === 0, R.engineWarnings.slice(0, 3).join(' | '));
 
     if (!keepOpen) await ctx.close();
     R.failures = failures;
