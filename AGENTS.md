@@ -5,7 +5,7 @@
 - Chess.com only: `@match` covers play/game/analysis/puzzles/daily pages; board selectors `chess-board, wc-chess-board`.
 - Engines are downloaded at runtime via ordered multi-source chains (unpkg → jsdelivr → this repo's GitHub release mirror); WASM bytes are SHA-256 pinned before caching. No WASM is committed to the repo. See registry below.
 - Browser extension build: `extension/` is a generated MV3 port of the userscript — all features, UI, and the H-panel keybind preserved; all 7 engines ship inside the extension. See "Browser Extension" below.
-- Auto-update: `@updateURL` / `@downloadURL` → raw.githubusercontent.com. **Bump `@version` on every push** (currently 11.8.1) or Tampermonkey won't detect the update.
+- Auto-update: `@updateURL` / `@downloadURL` → raw.githubusercontent.com. **Bump `@version` on every push** (currently 11.8.2) or Tampermonkey won't detect the update.
 - Only these GM APIs are granted: `GM_getResourceText`, `GM_getValue`, `GM_setValue`, `GM_xmlhttpRequest`, `GM_info`. The `@resource stockfish.js` (unpkg SF19 single JS) is used as the bundled loader JS for `sf19_00`.
 
 ## Commands
@@ -36,6 +36,7 @@
 - `src/gm-polyfill.js` shims the GM_* APIs on localStorage (`cabe_ext_*` keys) + fetch. Panel behavior is preserved exactly: starts hidden, **H toggles**, ✕ hides, Alt+B toggles bullet mode.
 - Real-browser E2E: `node extension/e2e-test.mjs` (needs a Playwright install via `--playwright=<path>`/env; auto-discovers Chromium/Brave/Edge) — verifies panel injection on live Chess.com, the H keybind, bundled local engine load (no CDN), a model switch, the cached reload, a REAL vs-computer game (auto-move must reach >= 3 positions with engine bestmoves logged), navigation recovery (returning mid-game shows Continue/New Game; pressing Continue must resume play), and auto-rematch (enabled via the panel checkbox: after a resign the bot itself clicks Rematch/New Game and a fresh game starts moving). Artifacts in `extension/e2e-artifacts/` (git-ignored). Gotchas it encodes: strip Playwright's default `--disable-extensions`; chess.com's own modal overlays intercept pointer events, so button checks use DOM clicks; guest games on /play/computer start via the setup panel's "Play" button; a PAUSED vs-computer board reports `getPlayingAs() === undefined` and the bot correctly idles until Continue resumes it.
 - Manifest notes: CSP needs `'wasm-unsafe-eval'`; **never add `blob:` to `worker-src`** — it makes Chrome silently refuse to load the entire extension (verified by manifest bisect; content-script blob workers work without it). Engine files must remain listed in `web_accessible_resources`.
+- `extension/icons/` — app icon: hand-crafted `icon.svg` (editable source) + rendered 16/32/48/128 PNGs, wired to manifest `icons` + `action.default_icon`; the userscript's `@icon` points at the 128px PNG on raw.githubusercontent. Regenerate by rasterizing the SVG through any headless browser (Chromium screenshot at 512, then bicubic downsample). `tests/extension.test.js` verifies the declared icons exist as real PNGs.
 
 ## Model Registry (LOCAL_ENGINES)
 | id | label | format | maxDepth | hasNNUE | hasSlowMover | hasWDL | hasContempt | hasMinThink | hasRepetition |

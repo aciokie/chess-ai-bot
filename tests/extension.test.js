@@ -51,6 +51,19 @@ check('version matches the userscript @version', () => {
     assert(m, 'userscript version not found');
     assert(m[1] === manifest.version, `manifest ${manifest.version} != userscript ${m[1]}`);
 });
+check('icons: declared in the manifest and present as real PNGs', () => {
+    const icons = manifest.icons || {};
+    for (const s of ['16', '32', '48', '128']) assert(icons[s], 'manifest.icons missing size ' + s);
+    for (const p of Object.values(icons)) {
+        const f = path.join(EXT, p);
+        assert(fs.existsSync(f), 'icon file missing on disk: ' + p);
+        const head = fs.readFileSync(f).subarray(0, 8);
+        assert(head.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), 'not a PNG: ' + p);
+        assert(fs.statSync(f).size > 200, 'suspiciously small icon: ' + p);
+    }
+    assert(manifest.action && manifest.action.default_icon, 'action.default_icon missing');
+    assert(fs.existsSync(path.join(EXT, 'icons', 'icon.svg')), 'icon.svg (editable source) missing');
+});
 check('content scripts: dual-world setup with correct order', () => {
     const cs = manifest.content_scripts;
     assert(Array.isArray(cs) && cs.length === 2, 'expected two content script entries (isolated + MAIN)');

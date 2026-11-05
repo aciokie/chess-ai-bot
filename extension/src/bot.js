@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.8.1
+// @version          11.8.2
 // @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -9,6 +9,7 @@
 // @downloadURL   https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js
 // @copyright     2025, Ech0
 // @license       MIT
+// @icon          https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/extension/icons/icon128.png
 // @match         https://www.chess.com/play/*
 // @match         https://www.chess.com/game/*
 // @match         https://www.chess.com/analysis
