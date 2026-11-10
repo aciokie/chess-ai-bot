@@ -7,3 +7,6 @@ extension/e2e-artifacts/
 
 # Playwright MCP scratch output
 .playwright-mcp/
+
+# Local OpenCode config — contains the Playwright MCP bridge token (project-scoped, never commit)
+opencode.jsonc

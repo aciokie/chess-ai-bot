@@ -93,7 +93,9 @@ test('bytes mode: bootstrap installs, beacons, and launches the loader', async (
     const bootstrapCode = captured.blobParts[0];
 
     const W = makeWorkerEnv();
-    vm.runInContext(bootstrapCode, W.env);
+    // The blob now contains [bootstrap, __sfStart wrapper, engine code] — the
+    // engine code is a plain function body (CSP-safe, no eval), so run it all.
+    vm.runInContext(captured.blobParts.join(''), W.env);
     assert(W.posts.includes('__probe:bootstrap-ready'), 'bootstrap-ready probe missing');
     assert(W.intervals.length === 1 && W.intervals[0].ms === 3000, '3s beacon interval missing');
 
@@ -113,7 +115,9 @@ test('bytes mode: bootstrap installs, beacons, and launches the loader', async (
     const modulePost = W.posts.findIndex(p => p && typeof p === 'object' && p.__type === 'module');
     assert(modulePost !== -1, 'compiled module was not captured/posted');
     assert(W.posts[modulePost].module && W.posts[modulePost].module.tag === 'compiled', 'wrong module forwarded');
-    assert(Array.isArray(W.transfers[modulePost]), 'module should be posted with a transfer list');
+    // WebAssembly.Module is cloneable, NOT transferable — a transfer list here
+    // throws ("does not have a transferable type") and kills the module cache.
+    assert(!W.transfers[modulePost], 'module must NOT be posted with a transfer list');
 });
 
 test('module mode: instantiate is redirected to the compiled module', async () => {
@@ -125,7 +129,7 @@ test('module mode: instantiate is redirected to the compiled module', async () =
     assert(launch.msg.wasmModule === compiled, 'compiled module not attached');
 
     const W = makeWorkerEnv();
-    vm.runInContext(captured.blobParts[0], W.env);
+    vm.runInContext(captured.blobParts.join(''), W.env);
     W.self.onmessage({ data: launch.msg });
 
     assert(W.posts.includes('__probe:module-mode'), 'module-mode probe missing');

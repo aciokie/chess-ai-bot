@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.8.2
-// @description   An extremely advanced Chess.com cheat menu with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
+// @version          11.9.0
+// @description   An extremely advanced chess assistant for Chess.com and Lichess.org with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
 // @updateURL     https://raw.githubusercontent.com/aciokie/chess-ai-bot/main/chess-ai-bot.user.js
@@ -16,6 +16,7 @@
 // @match         https://www.chess.com/analysis/*
 // @match         https://www.chess.com/puzzles/*
 // @match         https://www.chess.com/daily
+// @match         https://lichess.org/*
 // @connect       unpkg.com
 // @connect       cdn.jsdelivr.net
 // @connect       cdnjs.cloudflare.com
@@ -51,6 +52,13 @@
             _docEl.setAttribute("data-sf-bot-active", _ver);
         }
     } catch (_e) { }
+    // --- PLATFORM DETECTION ---
+    // The bot supports two sites: chess.com (default, DOM-driven) and lichess.org
+    // (adapter-driven: state from the public game export, moves sent over the
+    // captured round socket). PAGE is the real page window (unsafeWindow in the
+    // userscript sandbox; plain window in the extension's MAIN world).
+    const IS_LICHESS = /(^|\.)lichess\.org$/i.test(location.hostname);
+    const PAGE = (typeof unsafeWindow !== "undefined" && unsafeWindow) ? unsafeWindow : window;
     // --- CONFIGURATION ---
     const CONFIG = {
         BOARD_SEL: "chess-board, wc-chess-board",
@@ -539,8 +547,10 @@ const scheduleAutoMove = (fn, delayMs) => {
                 return;
             }
             // Verify the move is still legal on the current board
+            // (lichess has no local legal-move list — the shim reports none and
+            // the server validates; playMove + the send de-dupe guard apply).
             const move = state.currentBestMove;
-            if (move) {
+            if (move && !state.board.game.lichessSendMove) {
                 const from = move.substring(0, 2);
                 const to = move.substring(2, 4);
                 const legal = state.board.game.getLegalMoves().some(m => m.from === from && m.to === to);
@@ -611,10 +621,386 @@ const getMoveWinPct = (cp, mate) => {
         }
         return null;
     }
+    // ─── LICHESS SUPPORT ─────────────────────────────────────────────────────
+    // Read path:  GET /game/export/{id}?moves=true (same-origin fetch; the
+    //             session cookie carries auth) → players + UCI move list +
+    //             status. The full FEN is computed locally by lichessUciToFEN.
+    // Write path: a WebSocket.prototype.send probe captures the live round
+    //             socket (its keepalive ping fires every ~2.5s — the site
+    //             shadows nothing, so the prototype patch sees it). A move is
+    //             sent as the exact frame the site itself uses:
+    //                 {"t":"move","d":{"u":"e2e4","a":<ackId>}}
+    //             (verified live on lichess.org: the server accepts it, acks
+    //             and drives the board). Programmatic DOM events do NOT work —
+    //             chessground ignores untrusted input.
+    // Pure function (unit-tested in tests/lichess-uci-fen.test.js): apply UCI
+    // moves to a board model and emit a complete FEN.
+    function lichessUciToFEN(initialFen, uciMoves) {
+        const START_PIECES = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+        let baseFen = (typeof initialFen === "string" && initialFen.includes("/")) ? initialFen : START_PIECES;
+        const baseParts = baseFen.split(" ");
+        const rows = baseParts[0].split("/");
+        const b = [];             // b[rank 0..7][file 0..7], rank 0 = rank 1
+        for (let r = 0; r < 8; r++) b.push(new Array(8).fill(""));
+        for (let r = 0; r < 8; r++) {
+            let f = 0;
+            for (const ch of rows[r]) {
+                if (ch >= "1" && ch <= "8") f += parseInt(ch, 10);
+                else { if (f < 8) b[7 - r][f] = ch; f++; }
+            }
+        }
+        let turn = (baseParts[1] === "b") ? "b" : "w";
+        let rights = (baseParts[2] !== undefined && baseParts[2] !== "-") ? baseParts[2] : (baseParts[2] === "-" ? "" : "KQkq");
+        if (baseParts[2] === undefined && baseFen === START_PIECES) rights = "KQkq";
+        let ep = (baseParts[3] && baseParts[3] !== "-") ? baseParts[3] : "-";
+        let half = parseInt(baseParts[4], 10) || 0;
+        let full = parseInt(baseParts[5], 10) || 1;
+        const fileIdx = (c) => c.charCodeAt(0) - 97;
+        const rankIdx = (c) => parseInt(c, 10) - 1;
+        for (const uci of (uciMoves || [])) {
+            if (!uci || uci.length < 4) continue;
+            const ff = fileIdx(uci[0]), fr = rankIdx(uci[1]), tf = fileIdx(uci[2]), tr = rankIdx(uci[3]);
+            if (ff < 0 || ff > 7 || fr < 0 || fr > 7 || tf < 0 || tf > 7 || tr < 0 || tr > 7) continue;
+            const piece = b[fr][ff];
+            if (!piece) continue;
+            const isWhite = piece === piece.toUpperCase();
+            const kind = piece.toLowerCase();
+            const target = b[tr][tf];
+            let newEp = "-";
+            if (kind === "p" && Math.abs(tr - fr) === 2) newEp = uci[0] + (fr + (tr > fr ? 1 : -1) + 1);
+            if (kind === "p" && tf !== ff && !target) b[fr][tf] = "";   // en passant capture
+            b[tr][tf] = piece; b[fr][ff] = "";
+            if (kind === "p" && (tr === 0 || tr === 7)) {
+                const promo = (uci.length > 4 ? uci[4].toLowerCase() : "q");
+                b[tr][tf] = isWhite ? promo.toUpperCase() : promo;
+            }
+            if (kind === "k" && Math.abs(tf - ff) === 2) {              // castling rook move
+                if (tf > ff) { b[fr][5] = b[fr][7]; b[fr][7] = ""; }
+                else { b[fr][3] = b[fr][0]; b[fr][0] = ""; }
+            }
+            if (kind === "k") rights = rights.replace(isWhite ? /[KQ]/g : /[kq]/g, "");
+            else if (kind === "r") {
+                if (ff === 0) rights = rights.replace(isWhite ? "Q" : "q", "");
+                if (ff === 7) rights = rights.replace(isWhite ? "K" : "k", "");
+            }
+            if (target && target.toLowerCase() === "r") {               // rook captured on its home square
+                const wasWhiteRook = target === target.toUpperCase();
+                if (tf === 0) rights = rights.replace(wasWhiteRook ? "Q" : "q", "");
+                if (tf === 7) rights = rights.replace(wasWhiteRook ? "K" : "k", "");
+            }
+            half = (kind === "p" || target) ? 0 : half + 1;
+            if (turn === "b") full++;
+            turn = (turn === "w") ? "b" : "w";
+            ep = newEp;
+        }
+        const rankStrs = [];
+        for (let r = 7; r >= 0; r--) {
+            let s = "", empty = 0;
+            for (let f = 0; f < 8; f++) {
+                const ch = b[r][f];
+                if (!ch) empty++;
+                else { if (empty) { s += empty; empty = 0; } s += ch; }
+            }
+            if (empty) s += empty;
+            rankStrs.push(s || "8");
+        }
+        return rankStrs.join("/") + " " + turn + " " + (rights || "-") + " " + ep + " " + half + " " + full;
+    }
+    const Lichess = {
+        _inited: false, _accountId: null, _gameId: null, _myColor: null,
+        _moves: [], _fen: null, _status: null, _socks: [], _ack: 90000, _sentUci: "", _sentAt: 0,
+        _pollTimer: null, _fail: 0, _lastErrLog: 0, _lastKickLen: -1, _board: null,
+        _frameCount: 0, _lastFrameAt: 0, _lastKickFen: "",
+        gameIdFromUrl() {
+            const m = location.pathname.match(/^\/(?:game\/)?([A-Za-z0-9]{8})(?:\/(?:white|black))?\/?$/);
+            return m ? m[1] : null;
+        },
+        // Cold-start position: parse chessground's rendered pieces (absolute px
+        // transforms, board orientation from .cg-wrap). Returns the placement
+        // field of a FEN, or null.
+        _readPlacementFromDOM() {
+            try {
+                const board = document.querySelector("cg-board");
+                const wrap = document.querySelector(".cg-wrap");
+                if (!board || !wrap) return null;
+                const sq = board.getBoundingClientRect().width / 8;
+                if (!sq) return null;
+                const flipped = /orientation-black/.test(wrap.className);
+                const grid = [];
+                for (let r = 0; r < 8; r++) grid.push(new Array(8).fill(""));
+                const kinds = { pawn: "p", knight: "n", bishop: "b", rook: "r", queen: "q", king: "k" };
+                for (const el of board.querySelectorAll("piece")) {
+                    const cls = el.className;
+                    const kind = kinds[(cls.match(/\b(pawn|knight|bishop|rook|queen|king)\b/) || [])[1]];
+                    if (!kind) continue;
+                    const m = /translate\(\s*(-?[\d.]+)px\s*,\s*(-?[\d.]+)px\s*\)/.exec(el.getAttribute("style") || "");
+                    if (!m) continue;
+                    const fx = Math.round(parseFloat(m[1]) / sq), fy = Math.round(parseFloat(m[2]) / sq);
+                    if (fx < 0 || fx > 7 || fy < 0 || fy > 7) continue;
+                    const file = flipped ? 7 - fx : fx;
+                    const rank = flipped ? fy : 7 - fy;   // 0 = rank 1
+                    grid[rank][file] = /\bwhite\b/.test(cls) ? kind.toUpperCase() : kind;
+                }
+                const rows = [];
+                for (let r = 7; r >= 0; r--) {
+                    let s = "", empty = 0;
+                    for (let f = 0; f < 8; f++) {
+                        const ch = grid[r][f];
+                        if (!ch) empty++;
+                        else { if (empty) { s += empty; empty = 0; } s += ch; }
+                    }
+                    if (empty) s += empty;
+                    rows.push(s || "8");
+                }
+                return rows.join("/");
+            } catch (e) { return null; }
+        },
+        // Side to move from chessground's last-move squares: the destination
+        // square still holds the piece that just moved, so its color is the
+        // OPPOSITE of the side to move. Works for captures, en passant and
+        // promotions; returns null when ambiguous (falls back to SAN parity).
+        _readSideToMoveFromDOM() {
+            try {
+                const board = document.querySelector("cg-board");
+                const wrap = document.querySelector(".cg-wrap");
+                if (!board || !wrap) return null;
+                const sq = board.getBoundingClientRect().width / 8;
+                if (!sq) return null;
+                const flipped = /orientation-black/.test(wrap.className);
+                const toSquare = (el) => {
+                    const m = /translate\(\s*(-?[\d.]+)px\s*,\s*(-?[\d.]+)px\s*\)/.exec(el.getAttribute("style") || "");
+                    if (!m) return null;
+                    const fx = Math.round(parseFloat(m[1]) / sq), fy = Math.round(parseFloat(m[2]) / sq);
+                    const f = flipped ? 7 - fx : fx, r = (flipped ? fy : 7 - fy) + 1;
+                    return "abcdefgh"[f] + r;
+                };
+                const pieces = {};
+                for (const el of board.querySelectorAll("piece")) { const s = toSquare(el); if (s) pieces[s] = el.className; }
+                let sawWhite = false, sawBlack = false;
+                for (const el of board.querySelectorAll("square.last-move")) {
+                    const s = toSquare(el), cls = (s && pieces[s]) || "";
+                    if (/\bwhite\b/.test(cls)) sawWhite = true;
+                    if (/\bblack\b/.test(cls)) sawBlack = true;
+                }
+                if (sawWhite && !sawBlack) return "b";
+                if (sawBlack && !sawWhite) return "w";
+                return null;
+            } catch (e) { return null; }
+        },
+        // Castling rights heuristic from home squares (exact unless pieces moved
+        // away and back, which the socket frames then correct via UCI tracking).
+        _castlingFromPlacement(p) {
+            try {
+                const rows = p.split("/");
+                const get = (file, rank) => {
+                    const row = rows[8 - rank];
+                    let f = 0;
+                    for (const ch of row) {
+                        if (ch >= "1" && ch <= "8") f += parseInt(ch, 10);
+                        else { if (f === file) return ch; f++; }
+                    }
+                    return "";
+                };
+                let rights = "";
+                if (get(4, 1) === "K") { if (get(7, 1) === "R") rights += "K"; if (get(0, 1) === "R") rights += "Q"; }
+                if (get(4, 8) === "k") { if (get(7, 8) === "r") rights += "k"; if (get(0, 8) === "r") rights += "q"; }
+                return rights || "-";
+            } catch (e) { return "KQkq"; }
+        },
+        // Live updates: every server move frame carries {uci, ply} (and a
+        // placement-only fen) — advance the model instantly, no history needed.
+        _hookSocketMessages(ws) {
+            try {
+                if (!ws || ws.__sfHooked) return;
+                ws.__sfHooked = true;
+                ws.addEventListener("message", (ev) => this._onSocketData(ev && ev.data));
+            } catch (e) { }
+        },
+        _onSocketData(data) {
+            if (typeof data !== "string" || data.length < 3 || data.charAt(0) !== "{") return;
+            try {
+                const j = JSON.parse(data);
+                const evts = Array.isArray(j) ? j : [j];
+                for (const m of evts) {
+                    if (!m || typeof m !== "object") continue;
+                    if (m.t === "endData") { this._status = "finished"; continue; }
+                    if (m.t !== "move" || !m.d) continue;
+                    const uci = m.d.uci || m.d.u;
+                    if (!uci || uci.length < 4) continue;
+                    this._frameCount++;
+                    this._lastFrameAt = Date.now();
+                    if (this._fen) {
+                        let fen = lichessUciToFEN(this._fen, [uci]);
+                        if (m.d.ply) fen = fen.replace(/^(\S+)\s+\S+/, "$1 " + ((m.d.ply % 2 === 1) ? "b" : "w"));
+                        this._fen = fen;
+                    }
+                }
+            } catch (e) { }
+        },
+        patchSockets() {
+            try {
+                const WS = PAGE.WebSocket;
+                if (!WS || !WS.prototype || WS.prototype.__sfPatched) return;
+                const proto = WS.prototype;
+                const origSend = proto.send;
+                proto.send = function (data) {
+                    try { if (/\/play\//.test(String(this.url || "")) && !Lichess._socks.includes(this)) { Lichess._socks.push(this); Lichess._hookSocketMessages(this); } } catch (e) { }
+                    return origSend.apply(this, arguments);
+                };
+                proto.__sfPatched = true;
+            } catch (e) { }
+        },
+        detectIdentity() {
+            // /api/account requires an API token (session cookies are not accepted),
+            // so read the logged-in username from the page itself: the top-bar
+            // user link is a.user-link with href="/@/<username>".
+            if (this._accountId) return;
+            try {
+                const el = document.querySelector('a.user-link[href^="/@/"]');
+                const href = (el && el.getAttribute("href")) || "";
+                const name = href.split("/")[2];
+                if (name) {
+                    this._accountId = name.toLowerCase();
+                    console.log(`[SF Engine] Lichess: logged in as ${name}`);
+                }
+            } catch (e) { }
+        },
+        init() {
+            if (this._inited) return;
+            this._inited = true;
+            this.patchSockets();
+            this.detectIdentity();
+            try { PAGE.__sfLichess = this; } catch (e) { }
+            console.log(`[SF Engine] Lichess adapter active (state via /game/export, moves via captured round socket)`);
+            this._poll();
+        },
+        board() {
+            if (!this._gameId || !this._fen || this._status !== "started" || !this._myColor) return null;
+            if (!document.querySelector(".cg-wrap.manipulable")) return null;   // spectators are never driven
+            if (!this._board) {
+                const self = this;
+                this._board = {
+                    lichess: true,
+                    game: {
+                        getFEN: () => self._fen,
+                        getTurn: () => (self._fen.split(" ")[1] === "b" ? 2 : 1),
+                        getPlayingAs: () => (self._myColor === "black" ? 2 : (self._myColor === "white" ? 1 : null)),
+                        getLegalMoves: () => [],
+                        move: () => { },
+                        lichessSendMove: (uci) => self.sendMove(uci)
+                    }
+                };
+            }
+            return this._board;
+        },
+        sendMove(uci) {
+            if (!uci || uci.length < 4) return false;
+            const now = Date.now();
+            if (uci === this._sentUci && now - this._sentAt < 8000) return false;   // de-dupe retries
+            this._socks = this._socks.filter((s) => s.readyState === 1);
+            const id = this._gameId;
+            let ws = this._socks.find((s) => String(s.url).includes("/play/" + id + "/socket"));
+            if (!ws) ws = this._socks.find((s) => s.readyState === 1);
+            if (!ws) { console.warn(`[SF Engine] Lichess: no round socket captured yet — cannot send ${uci}`); return false; }
+            try {
+                ws.send(JSON.stringify({ t: "move", d: { u: uci, a: ++this._ack } }));
+                this._sentUci = uci; this._sentAt = now;
+                return true;
+            } catch (e) { console.error(`[SF Engine] Lichess: send failed`, e); return false; }
+        },
+        _schedule(ms) {
+            clearTimeout(this._pollTimer);
+            this._pollTimer = setTimeout(() => this._poll(), ms);
+        },
+        _poll() {
+            const finish = (ms) => { this._schedule(ms); };
+            const id = this.gameIdFromUrl();
+            if (!id) { this._gameId = null; this._fen = null; this._moves = []; this._status = null; return finish(4000); }
+            if (!this._accountId) this.detectIdentity();
+            if (id !== this._gameId) {
+                this._gameId = id; this._moves = []; this._fen = null; this._myColor = null;
+                this._status = "loading"; this._lastKickLen = -1;
+                console.log(`[SF Engine] Lichess: game ${id} detected`);
+            }
+            try {
+                PAGE.fetch(`/game/export/${id}?moves=true`, { credentials: "same-origin", headers: { Accept: "application/x-ndjson" } })
+                    .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+                    .then((j) => {
+                        this._fail = 0;
+                        this._status = j.status || "started";
+                        const moves = String(j.moves || "").split(" ").filter(Boolean);
+                        if (j.players && this._accountId) {
+                            const wid = j.players.white && j.players.white.user && j.players.white.user.id;
+                            const bid = j.players.black && j.players.black.user && j.players.black.user.id;
+                            if (wid && String(wid).toLowerCase() === this._accountId) this._myColor = "white";
+                            else if (bid && String(bid).toLowerCase() === this._accountId) this._myColor = "black";
+                        }
+                        // Fallback: the player's board is oriented to their side. Only a
+                        // manipulable board counts — spectators must never be driven.
+                        if (!this._myColor) {
+                            try {
+                                const wrap = document.querySelector(".cg-wrap.manipulable");
+                                if (wrap && /orientation-(white|black)/.test(wrap.className)) this._myColor = /orientation-black/.test(wrap.className) ? "black" : "white";
+                            } catch (e) { }
+                        }
+                        if (j.variant && j.variant !== "standard") { this._status = "unsupported"; return finish(5000); }
+                        const sanCount = moves.length;
+                        // Position model — the board DOM is the ground truth:
+                        //   * placement: parsed from chessground pieces (exact)
+                        //   * side to move: last-move square piece color (exact-ish),
+                        //     falling back to the SAN count parity
+                        //   * castling: home-square heuristic; ep unknown ("-")
+                        // Socket move frames additionally advance the model between
+                        // polls for snappier reactions; every poll re-snapshots the
+                        // DOM so drift can never survive more than one tick.
+                        // (The /game/export moves field is laggy for AI/correspondence
+                        // games — observed frozen for minutes — so it is used ONLY for
+                        // count parity, players and status.)
+                        const place = this._readPlacementFromDOM();
+                        if (place) {
+                            let turn = this._readSideToMoveFromDOM();
+                            if (!turn) turn = (sanCount % 2 === 0) ? "w" : "b";
+                            const rights = this._castlingFromPlacement(place);
+                            this._fen = place + " " + turn + " " + rights + " - 0 1";
+                        }
+                        const changed = sanCount !== this._moves.length || this._fen !== this._lastKickFen;
+                        this._moves = moves;
+                        if (changed && sanCount !== this._lastKickLen) {
+                            this._lastKickLen = sanCount;
+                            this._lastKickFen = this._fen;
+                            try { checkAndAnalyze(); } catch (e) { }
+                        }
+                        if (this._status !== "started") return finish(4000);
+                        let ourTurn = false;
+                        if (this._myColor && this._fen) {
+                            ourTurn = (this._fen.split(" ")[1] === "w") === (this._myColor === "white");
+                        } else if (this._myColor) {
+                            ourTurn = (sanCount % 2 === 0) === (this._myColor === "white");
+                        }
+                        finish(ourTurn ? 1000 : 2500);
+                    })
+                    .catch((e) => {
+                        this._fail++;
+                        if (Date.now() - this._lastErrLog > 15000) {
+                            this._lastErrLog = Date.now();
+                            console.log(`[SF Engine] Lichess: poll failed (${String(e && e.message || e).slice(0, 120)}) — retrying`);
+                        }
+                        finish(3000);
+                    });
+            } catch (e) { finish(3000); }
+        },
+        state() {
+            return {
+                account: this._accountId, gameId: this._gameId, color: this._myColor,
+                status: this._status, moves: this._moves.length, fen: this._fen,
+                sockets: this._socks.map((s) => s.readyState)
+            };
+        }
+    };
     // --- VISUAL MANAGER ---
     const Visuals = {
         add: (move, type) => {
-            if (!move) return;
+            if (!move || IS_LICHESS) return;   // chess.com board DOM only
             if (!settings.showMoveHighlights) return;
             if (type === 'history') {
                 Visuals.removeByType('history');
@@ -740,12 +1126,13 @@ const getMoveWinPct = (cp, mate) => {
         interval: null,
         lastMoves: [],
         update: (pvMoves) => {
+            if (IS_LICHESS) { PV.lastMoves = pvMoves || []; return; }   // no chess.com board DOM
             PV.lastMoves = pvMoves || [];
             if (!settings.showPVArrows) { PV.clear(); return; }
             PV.draw();
             if (!PV.interval) PV.interval = setInterval(PV.draw, 100);
         },
-        clear: () => { if (PV.interval) { clearInterval(PV.interval); PV.interval = null; } const cr = ShadowKit.boardRoot(state.board || document.querySelector(CONFIG.BOARD_SEL)); if (cr) cr.querySelectorAll('.pv-arrow').forEach(el => el.remove()); },
+        clear: () => { if (PV.interval) { clearInterval(PV.interval); PV.interval = null; } if (IS_LICHESS) return; const cr = ShadowKit.boardRoot(state.board || document.querySelector(CONFIG.BOARD_SEL)); if (cr) cr.querySelectorAll('.pv-arrow').forEach(el => el.remove()); },
         draw: () => {
             state.board = document.querySelector(CONFIG.BOARD_SEL);
             if (!state.board) return;
@@ -1478,7 +1865,10 @@ WebAssembly.instantiate = function(bufferOrModule, imports) {
             _modulePosted = true;
             self.postMessage("__probe:module-captured");
             try {
-                self.postMessage({ __type: "module", module: res.module }, [res.module]);
+                // WebAssembly.Module is structured-CLONEABLE, not transferable —
+                // passing it in a transfer list throws ("does not have a
+                // transferable type") and silently killed the module cache.
+                self.postMessage({ __type: "module", module: res.module });
             } catch (e) {
                 self.postMessage("__probe:module-post-failed " + (e && e.message || e));
             }
@@ -1491,6 +1881,16 @@ WebAssembly.instantiate = function(bufferOrModule, imports) {
         }
         throw err;
     });
+};
+// CSP / synthetic-response proof: route streaming compile through bytes.
+// Stockfish's instantiateWasm callback uses instantiateStreaming() on the
+// response served by our fetch mock — on some sites (lichess.org) that path
+// fails or never settles (synthetic Responses + strict CSP), and the callback
+// has no bytes fallback, so the engine would hang. compile(bytes)/instantiate
+// are proven fine there; go through the (already wrapped) instantiate instead.
+WebAssembly.instantiateStreaming = function(resp, imports) {
+    var bufP = (resp && typeof resp.arrayBuffer === "function") ? resp.arrayBuffer() : Promise.resolve(resp);
+    return bufP.then(function(buf) { return WebAssembly.instantiate(buf, imports); });
 };
 self.postMessage("__probe:bootstrap-ready");
 var _probeCount = 0;
@@ -1551,10 +1951,11 @@ self.onmessage = function(e) {
         try {
             self.Module = self.Module || {};
             self.Module.onDoneSearching = self.Module.onDoneSearching || function(){};
-            var code = d.jsCode || "";
-            code = code.replace(/ie\\[e\\]\\.apply\\(null\\s*,\\s*fe\\)/g, "(ie[e]||function(){}).apply(null,fe)");
-            var F = new Function(code);
-            F();
+            // CSP-safe: the engine code is appended to this blob as the body of
+            // __sfStart (set below, after the template) — no eval/new Function.
+            // lichess.org's CSP forbids eval, and blob workers inherit it.
+            if (typeof self.__sfStart === "function") self.__sfStart();
+            else throw new Error("engine code missing from bootstrap blob");
         } catch (err) {
             self.postMessage("__probe:loader-error " + (err && err.message || err));
             throw err;
@@ -1562,13 +1963,17 @@ self.onmessage = function(e) {
     }
 };
 `;
-        const blob = new Blob([bootstrapCode], { type: "application/javascript" });
+        // CSP-safe engine code delivery: append it as __sfStart's function body
+        // instead of runtime-evaluating a string. Some sites (lichess.org) forbid
+        // eval/new Function even inside blob workers — a plain function is fine.
+        const sfJsCode = String(jsCode || "").replace(/ie\[e\]\.apply\(null\s*,\s*fe\)/g, "(ie[e]||function(){}).apply(null,fe)");
+        const blob = new Blob([bootstrapCode, "\nself.__sfStart = function() {\n", sfJsCode, "\n};\n"], { type: "application/javascript" });
         const worker = new Worker(URL.createObjectURL(blob));
         if (moduleMode) {
-            worker.postMessage({ __type: "launch-module", jsCode: jsCode, wasmModule: compiledModule }, [compiledModule]);
+            worker.postMessage({ __type: "launch-module", wasmModule: compiledModule });
         } else {
             const ab = wasmBytes instanceof ArrayBuffer ? wasmBytes : wasmBytes.buffer;
-            worker.postMessage({ __type: "launch", jsCode: jsCode, wasmBytes: ab }, [ab]);
+            worker.postMessage({ __type: "launch", wasmBytes: ab }, [ab]);
         }
         return worker;
     }
@@ -1938,7 +2343,10 @@ self.onmessage = function(e) {
         openCache((dbErr, db) => {
             if (!isCurrentLoad()) return;
             if (dbErr) {
-                console.warn(`[SF Engine] IndexedDB open failed (continuing without cache):`, dbErr);
+                // Handled degradation (the engine then loads without cache) —
+                // info-level so a transient browser storage stall doesn't read
+                // as an error in normal flows.
+                console.log(`[SF Engine] IndexedDB open failed (continuing without cache):`, dbErr);
             }
             console.log(`[SF Engine] IndexedDB ${db ? 'opened' : 'unavailable'}`);
 
@@ -2292,7 +2700,7 @@ self.onmessage = function(e) {
             }
         }, watchdogMs + 2000);
         if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
-        if (settings.showEvalBar) EvalBar.reset();
+        if (settings.showEvalBar && !IS_LICHESS) EvalBar.reset();
         let delay;
         if (settings.bulletMode) {
             delay = 0;
@@ -2326,7 +2734,7 @@ self.onmessage = function(e) {
                     if (turnNum === paNum) {
                         const from = bookMove.substring(0, 2);
                         const to = bookMove.substring(2, 4);
-                        if (board.game.getLegalMoves().some(m => m.from === from && m.to === to)) {
+                        if (board.game.lichessSendMove || board.game.getLegalMoves().some(m => m.from === from && m.to === to)) {
                             // Book moves should have human-like delays too, not instant
                             const tmDelay = computeTimeManagedDelay();
                             let bookDelay;
@@ -2690,7 +3098,7 @@ self.onmessage = function(e) {
         // ─── Threat Detection ── detect if opponent's last move created a threat
         // using the current analysis result. Only runs when it's our turn
         // (opponent just moved).
-        if (ThreatDetector.enabled && isOurTurnNow()) {
+        if (!IS_LICHESS && ThreatDetector.enabled && isOurTurnNow()) {
             // normEval/normMate are already "our perspective" (positive = good for us).
 
             let threatMove = '';
@@ -2983,6 +3391,17 @@ function triggerAutoMove(fen = null) {
         const fromPiece = fenPieceAt(piecesPart, from);
         if (!fromPiece || (turnNum === 1 && fromPiece === fromPiece.toLowerCase()) || (turnNum === 2 && fromPiece === fromPiece.toUpperCase())) {
             console.warn(`[SF Engine] playMove aborted: from square ${from} holds an opponent piece or is empty`);
+            return;
+        }
+        if (state.board.game.lichessSendMove) {   // lichess: send the move frame over the captured round socket
+            const sent = state.board.game.lichessSendMove(move);
+            if (sent) {
+                state.lastMoveResult = `✅ Sent ${move}`;
+                console.log(`[SF Engine] Lichess: sent ${move}`);
+                updateUI();
+            } else {
+                console.warn(`[SF Engine] Lichess: move not sent (socket not captured yet): ${move}`);
+            }
             return;
         }
         for (const m of state.board.game.getLegalMoves()) {
@@ -4747,13 +5166,13 @@ pvSettings: document.getElementById("pvSettings"),
     }
 
     function checkAndAnalyze() {
-        state.board = document.querySelector(CONFIG.BOARD_SEL);
+        state.board = IS_LICHESS ? Lichess.board() : document.querySelector(CONFIG.BOARD_SEL);
         // Re-setup board observer if board element changed
         if (state.board && state.board instanceof Node && (!state.boardObserver || state.boardObserver.element !== state.board)) {
             setupBoardObserver();
         }
-        try { HighlightObserver.ensure(); } catch (e) { console.error(`[SF Engine] HighlightObserver failed:`, e); }
-        if (settings.showEvalBar) {
+        if (!IS_LICHESS) { try { HighlightObserver.ensure(); } catch (e) { console.error(`[SF Engine] HighlightObserver failed:`, e); } }
+        if (settings.showEvalBar && !IS_LICHESS) {
             try {
                 EvalBar.create();
                 EvalBar.updatePosition();
@@ -4777,7 +5196,7 @@ pvSettings: document.getElementById("pvSettings"),
         }
 
         if (state.board?.game && settings.autoRun && raw) {
-            if (settings.hideAfterMove && state.lastSeenFEN && clean !== state.lastSeenFEN) {
+            if (settings.hideAfterMove && !IS_LICHESS && state.lastSeenFEN && clean !== state.lastSeenFEN) {
                 try {
                     Visuals.removeByType('history'); Visuals.removeByType('analysis'); PV.clear();
                     // Reset threat highlight and eval bar on new board
@@ -5110,6 +5529,9 @@ pvSettings: document.getElementById("pvSettings"),
             GM_xmlhttpRequest({ method: "GET", url: TRACK_URL, timeout: 10000 });
         }
     }
+
+    // Lichess: start the platform adapter (socket capture + state polling).
+    if (IS_LICHESS) { try { Lichess.init(); } catch (e) { console.error(`[SF Engine] Lichess init failed:`, e); } }
 
     // Initial check
     checkAndAnalyze();

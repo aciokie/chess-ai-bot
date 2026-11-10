@@ -15,6 +15,7 @@ const FILES = [
     'worker-bootstrap.test.js',
     'mirror-workflow.test.js',
     'extension.test.js',
+    'lichess-uci-fen.test.js',
 ];
 
 let failed = 0;
