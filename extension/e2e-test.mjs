@@ -151,7 +151,7 @@ const WALK_SHADOW = `(() => { const w = (root) => { let t = root.textContent || 
     check('engine ready (bundled, local)', R.engine1.text.includes('Ready'), R.engine1.text);
     const C1 = R.console.join('\n');
     check('no CDN download needed', !C1.includes('Download attempt 2'));
-    check('local bundled source used', C1.includes('downloading from bundled'));
+    check('local bundled source used', C1.includes('loading bundled engine file'));
 
     // 2. H keybind + ✕ cycle (blur first: the script ignores keys in inputs)
     await p.evaluate(() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); });

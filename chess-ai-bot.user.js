@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.9.0
+// @version          11.9.1
 // @description   An extremely advanced chess assistant for Chess.com and Lichess.org with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -387,7 +387,7 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         themePrimary: "#81b64c",
         menuOpacity: 0.9,
         debugLogs: !1,
-        menuPosition: "top-right",
+        menuPosition: IS_LICHESS ? "top-left" : "top-right",   // lichess: avoid covering the clock/moves
         localModelId: "sf19_small",
         // Per-model settings are stored under "m_<modelId>_<key>" via GM_setValue.
         // These flat keys are only used as in-memory working copies (loaded on model select).
@@ -712,7 +712,9 @@ const getMoveWinPct = (cp, mate) => {
         _pollTimer: null, _fail: 0, _lastErrLog: 0, _lastKickLen: -1, _board: null,
         _frameCount: 0, _lastFrameAt: 0, _lastKickFen: "",
         gameIdFromUrl() {
-            const m = location.pathname.match(/^\/(?:game\/)?([A-Za-z0-9]{8})(?:\/(?:white|black))?\/?$/);
+            // Game ids exist in 8-char (legacy) and 12-char (current) forms —
+            // requiring exactly 8 silently broke every new live game!
+            const m = location.pathname.match(/^\/(?:game\/)?([A-Za-z0-9]{8,12})(?:\/(?:white|black))?\/?$/);
             return m ? m[1] : null;
         },
         // Cold-start position: parse chessground's rendered pieces (absolute px
@@ -735,7 +737,11 @@ const getMoveWinPct = (cp, mate) => {
                     if (!kind) continue;
                     const m = /translate\(\s*(-?[\d.]+)px\s*,\s*(-?[\d.]+)px\s*\)/.exec(el.getAttribute("style") || "");
                     if (!m) continue;
-                    const fx = Math.round(parseFloat(m[1]) / sq), fy = Math.round(parseFloat(m[2]) / sq);
+                    const rawX = parseFloat(m[1]) / sq, rawY = parseFloat(m[2]) / sq;
+                    // Mid-animation pieces have fractional offsets — a snapshot
+                    // taken then would produce a broken position. Skip this read.
+                    if (Math.abs(rawX - Math.round(rawX)) > 0.12 || Math.abs(rawY - Math.round(rawY)) > 0.12) return null;
+                    const fx = Math.round(rawX), fy = Math.round(rawY);
                     if (fx < 0 || fx > 7 || fy < 0 || fy > 7) continue;
                     const file = flipped ? 7 - fx : fx;
                     const rank = flipped ? fy : 7 - fy;   // 0 = rank 1
@@ -821,6 +827,7 @@ const getMoveWinPct = (cp, mate) => {
             try {
                 const j = JSON.parse(data);
                 const evts = Array.isArray(j) ? j : [j];
+                let kicked = false;
                 for (const m of evts) {
                     if (!m || typeof m !== "object") continue;
                     if (m.t === "endData") { this._status = "finished"; continue; }
@@ -834,34 +841,69 @@ const getMoveWinPct = (cp, mate) => {
                         if (m.d.ply) fen = fen.replace(/^(\S+)\s+\S+/, "$1 " + ((m.d.ply % 2 === 1) ? "b" : "w"));
                         this._fen = fen;
                     }
+                    kicked = true;
                 }
+                // Instant reaction: don't wait for the next poll tick (this is
+                // the difference between a snappy bot and a "so slow" one).
+                if (kicked) { try { checkAndAnalyze(); } catch (e) { } }
             } catch (e) { }
         },
         patchSockets() {
             try {
                 const WS = PAGE.WebSocket;
-                if (!WS || !WS.prototype || WS.prototype.__sfPatched) return;
+                if (!WS || !WS.prototype) return;
                 const proto = WS.prototype;
-                const origSend = proto.send;
-                proto.send = function (data) {
-                    try { if (/\/play\//.test(String(this.url || "")) && !Lichess._socks.includes(this)) { Lichess._socks.push(this); Lichess._hookSocketMessages(this); } } catch (e) { }
-                    return origSend.apply(this, arguments);
-                };
-                proto.__sfPatched = true;
+                // Shared registry: another bot instance (userscript+extension
+                // coexistence, or a sibling version) may have installed its own
+                // send wrapper already — sockets must be visible to EVERYTHING.
+                const shared = PAGE.__sfLichSocks = PAGE.__sfLichSocks || [];
+                if (!proto.__sfPatchedSf11) {
+                    const origSend = proto.send;
+                    proto.send = function (data) {
+                        try {
+                            if (/\/play\//.test(String(this.url || "")) && shared.indexOf(this) === -1) shared.push(this);
+                        } catch (e) { }
+                        return origSend.apply(this, arguments);
+                    };
+                    proto.__sfPatchedSf11 = true;
+                }
+                // Adopt every known round socket (existing + future).
+                for (const s of shared) {
+                    try {
+                        if (!this._socks.includes(s)) this._socks.push(s);
+                        this._hookSocketMessages(s);
+                    } catch (e) { }
+                }
             } catch (e) { }
         },
         detectIdentity() {
             // /api/account requires an API token (session cookies are not accepted),
-            // so read the logged-in username from the page itself: the top-bar
-            // user link is a.user-link with href="/@/<username>".
-            if (this._accountId) return;
+            // so read the logged-in username from the page itself. Prefer the
+            // account menu in the top bar — a generic "first /@/ link" can be a
+            // RECENT-GAMES opponent on the homepage (observed picking the wrong
+            // user). Re-runs until the color is matched against a live game.
+            if (this._accountId && this._myColor) return;
             try {
-                const el = document.querySelector('a.user-link[href^="/@/"]');
-                const href = (el && el.getAttribute("href")) || "";
-                const name = href.split("/")[2];
+                let name = null;
+                const hdr = document.querySelector("header a.user-link[href^=\"/@/\"], header button.user-link, header .user-link");
+                if (hdr) {
+                    const href = hdr.getAttribute && hdr.getAttribute("href");
+                    if (href && href.indexOf("/@/") === 0) name = href.split("/")[2];
+                    if (!name) {
+                        const t = (hdr.textContent || "").trim();
+                        const mm = t.match(/^([A-Za-z0-9_-]{2,30})/);
+                        if (mm) name = mm[1];
+                    }
+                }
+                if (!name) {
+                    const el = document.querySelector('a.user-link[href^="/@/"]');
+                    const href = (el && el.getAttribute("href")) || "";
+                    name = href.split("/")[2];
+                }
                 if (name) {
-                    this._accountId = name.toLowerCase();
-                    console.log(`[SF Engine] Lichess: logged in as ${name}`);
+                    const id = name.toLowerCase();
+                    if (id !== this._accountId) console.log(`[SF Engine] Lichess: logged in as ${name}`);
+                    this._accountId = id;
                 }
             } catch (e) { }
         },
@@ -871,6 +913,7 @@ const getMoveWinPct = (cp, mate) => {
             this.patchSockets();
             this.detectIdentity();
             try { PAGE.__sfLichess = this; } catch (e) { }
+            try { PAGE.__sfOverlay = LichessOverlay; } catch (e) { }   // debug/support hook
             console.log(`[SF Engine] Lichess adapter active (state via /game/export, moves via captured round socket)`);
             this._poll();
         },
@@ -956,12 +999,20 @@ const getMoveWinPct = (cp, mate) => {
                         // (The /game/export moves field is laggy for AI/correspondence
                         // games — observed frozen for minutes — so it is used ONLY for
                         // count parity, players and status.)
+                        // Position model: socket frames are the fast path; the DOM is
+                        // the safety net. Resnap when cold, when frames stalled, or
+                        // whenever the DOM placement DISAGREES with the model (missed
+                        // frame / mid-update drift) — the animation guard inside the
+                        // reader makes this safe even during piece animations.
                         const place = this._readPlacementFromDOM();
-                        if (place) {
+                        const modelPlace = this._fen ? this._fen.split(" ")[0] : null;
+                        const stale = Date.now() - this._lastFrameAt > 8000;
+                        if (place && (!this._fen || stale || place !== modelPlace)) {
                             let turn = this._readSideToMoveFromDOM();
                             if (!turn) turn = (sanCount % 2 === 0) ? "w" : "b";
                             const rights = this._castlingFromPlacement(place);
-                            this._fen = place + " " + turn + " " + rights + " - 0 1";
+                            const fen = place + " " + turn + " " + rights + " - 0 1";
+                            if (fen !== this._fen) this._fen = fen;
                         }
                         const changed = sanCount !== this._moves.length || this._fen !== this._lastKickFen;
                         this._moves = moves;
@@ -997,10 +1048,143 @@ const getMoveWinPct = (cp, mate) => {
             };
         }
     };
+    // ─── LICHESS OVERLAY (arrows / move highlights / PV / threat) ────────────
+    // One SVG layer inside .cg-wrap, viewBox "0 0 8 8" (square units) so it is
+    // resize- and orientation-proof. Sync() rebuilds from state.visuals,
+    // PV.lastMoves and ThreatDetector state — the single source of drawings.
+    const LichessOverlay = {
+        _layer: null, _svg: null, _timer: null, _evalEl: null, _evalFill: null, _evalText: null,
+        // Native-style eval bar: slim white/black split anchored to the board's
+        // left edge, score underneath. pct is OUR win chance.
+        renderEval(pct, score) {
+            if (!IS_LICHESS) return;
+            const layer = this._mount();
+            if (!layer) return;
+            if (!this._evalEl || !this._evalEl.isConnected) {
+                this._evalEl = document.createElement("div");
+                this._evalEl.id = "sf-lich-eval";
+                this._evalEl.style.cssText = "position:absolute;left:-26px;top:0;width:14px;height:100%;background:#111;border-radius:3px;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.22);";
+                this._evalFill = document.createElement("div");
+                this._evalFill.id = "sf-lich-eval-fill";
+                this._evalFill.style.cssText = "position:absolute;left:0;right:0;bottom:0;height:50%;background:linear-gradient(180deg,#f7f7f7,#d9d9d9);";
+                this._evalText = document.createElement("div");
+                this._evalText.id = "sf-lich-eval-score";
+                this._evalText.style.cssText = "position:absolute;left:-10px;top:100%;width:34px;padding-top:3px;text-align:center;font-size:10px;font-weight:700;color:#c9c9c9;text-shadow:0 1px 2px rgba(0,0,0,.6);pointer-events:none;";
+                this._evalEl.appendChild(this._evalFill);
+                layer.appendChild(this._evalEl);
+                layer.appendChild(this._evalText);
+            }
+            const whiteShare = (EvalBar.getPlayingAs() === 2) ? (100 - pct) : pct;
+            const flipped = /orientation-black/.test((document.querySelector(".cg-wrap") || {}).className || "");
+            this._evalFill.style.bottom = flipped ? "auto" : "0";
+            this._evalFill.style.top = flipped ? "0" : "auto";
+            this._evalFill.style.height = whiteShare.toFixed(1) + "%";
+            this._evalText.textContent = score || "";
+        },
+        _mount() {
+            const wrap = document.querySelector(".cg-wrap");
+            if (!wrap) return null;
+            if (this._layer && this._layer.parentElement === wrap) return this._layer;
+            if (this._layer) this._layer.remove();
+            const layer = document.createElement("div");
+            layer.id = "sf-lich-overlay";
+            layer.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:9;overflow:visible;";
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.id = "sf-lich-arrows";
+            svg.setAttribute("viewBox", "0 0 8 8");
+            svg.setAttribute("preserveAspectRatio", "none");
+            svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;overflow:visible;";
+            layer.appendChild(svg);
+            wrap.appendChild(layer);
+            this._layer = layer; this._svg = svg;
+            return layer;
+        },
+        _sq(name) {
+            const wrap = document.querySelector(".cg-wrap");
+            const flipped = /orientation-black/.test((wrap && wrap.className) || "");
+            const f = "abcdefgh".indexOf(name[0]);
+            const r = parseInt(name[1], 10);
+            return {
+                x: flipped ? 7.5 - f : f + 0.5,
+                y: flipped ? r - 0.5 : 8.5 - r
+            };
+        },
+        sync() {
+            if (!IS_LICHESS) return;
+            const wrap = document.querySelector(".cg-wrap");
+            if (!wrap) {
+                if (this._timer) { clearInterval(this._timer); this._timer = null; }
+                if (this._layer) { this._layer.remove(); this._layer = null; this._svg = null; }
+                this._evalEl = null; this._evalFill = null; this._evalText = null;
+                return;
+            }
+            const layer = this._mount();
+            if (!layer) return;
+            const arrows = [];
+            // Lichess-native green for the move highlights when the user kept
+            // the stock cyan default; custom colors are respected as-is.
+            const moveColor = (settings.highlightColor === "#00eeff") ? "#81b64c" : settings.highlightColor;
+            try {
+                for (const v of state.visuals) {
+                    const mv = v && v.move;
+                    if (mv && mv.length >= 4) arrows.push({ from: mv.slice(0, 2), to: mv.slice(2, 4), color: moveColor, w: 0.2, o: v.isFading ? 0.25 : 0.85 });
+                }
+            } catch (e) { }
+            try {
+                if (settings.showPVArrows && PV.lastMoves && PV.lastMoves.length) {
+                    const limit = Math.min(PV.lastMoves.length, settings.pvDepth);
+                    for (let i = 0; i < limit; i++) {
+                        const mv = PV.lastMoves[i];
+                        if (!mv || mv.length < 4) continue;
+                        arrows.push({ from: mv.slice(0, 2), to: mv.slice(2, 4), color: settings.highlightColor, w: 0.15 - Math.min(0.09, i * 0.02), o: Math.max(0.25, 0.75 - i * 0.15) });
+                    }
+                }
+            } catch (e) { }
+            try {
+                if (ThreatDetector.enabled && ThreatDetector.threatMove) {
+                    const mv = ThreatDetector.threatMove;
+                    if (mv.length >= 4) arrows.push({ from: mv.slice(0, 2), to: mv.slice(2, 4), color: "#ff4444", w: 0.2, o: 0.9 });
+                }
+            } catch (e) { }
+            const svg = this._svg;
+            while (svg.firstChild) svg.removeChild(svg.firstChild);
+            const NS = "http://www.w3.org/2000/svg";
+            for (const a of arrows) {
+                const f = this._sq(a.from), t = this._sq(a.to);
+                const dx = t.x - f.x, dy = t.y - f.y;
+                const len = Math.sqrt(dx * dx + dy * dy) || 1;
+                const ux = dx / len, uy = dy / len;
+                const sx = f.x + ux * 0.3, sy = f.y + uy * 0.3;
+                const hx = t.x - ux * 0.06, hy = t.y - uy * 0.06;
+                const headLen = 0.34, headW = 0.66 * (a.w / 0.2);
+                const bx = hx - ux * headLen, by = hy - uy * headLen;
+                const line = document.createElementNS(NS, "line");
+                line.setAttribute("x1", sx); line.setAttribute("y1", sy);
+                line.setAttribute("x2", bx + ux * 0.15); line.setAttribute("y2", by + uy * 0.15);
+                line.setAttribute("stroke", a.color);
+                line.setAttribute("stroke-width", a.w);
+                line.setAttribute("stroke-linecap", "round");
+                line.setAttribute("opacity", a.o);
+                svg.appendChild(line);
+                const px = -uy, py = ux;
+                const poly = document.createElementNS(NS, "polygon");
+                poly.setAttribute("points",
+                    hx + "," + hy + " " +
+                    (bx + px * headW / 2) + "," + (by + py * headW / 2) + " " +
+                    (bx - px * headW / 2) + "," + (by - py * headW / 2));
+                poly.setAttribute("fill", a.color);
+                poly.setAttribute("opacity", a.o);
+                svg.appendChild(poly);
+            }
+            // Keep re-syncing while anything is drawn (board resizes/orientation).
+            if (arrows.length && !this._timer) this._timer = setInterval(() => { try { this.sync(); } catch (e) { } }, 600);
+            if (!arrows.length && this._timer) { clearInterval(this._timer); this._timer = null; }
+        }
+    };
     // --- VISUAL MANAGER ---
     const Visuals = {
         add: (move, type) => {
-            if (!move || IS_LICHESS) return;   // chess.com board DOM only
+            if (!move) return;
             if (!settings.showMoveHighlights) return;
             if (type === 'history') {
                 Visuals.removeByType('history');
@@ -1011,6 +1195,18 @@ const getMoveWinPct = (cp, mate) => {
             const id = `vis-${type}-${move}`;
             const existingIdx = state.visuals.findIndex(v => v.id === id);
             if (existingIdx !== -1) Visuals.remove(id);
+
+            // LICHESS: state-only bookkeeping — the SVG overlay renders from it.
+            if (IS_LICHESS) {
+                state.visuals.push({ id, move, type, interval: null, isFading: false });
+                if (type === 'history' && settings.visualDuration === -1) { LichessOverlay.sync(); return; }   // persist until board change
+                if (type === 'history' && settings.visualDuration > 0) {
+                    const ms = settings.visualDuration * 1000;
+                    setTimeout(() => Visuals.remove(id), ms);
+                }
+                LichessOverlay.sync();
+                return;
+            }
 
             // NATIVE ARROW HANDLING
             if (settings.visualType === "nativeArrow") {
@@ -1057,6 +1253,7 @@ const getMoveWinPct = (cp, mate) => {
             });
         },
         draw: (id, move) => {
+            if (IS_LICHESS) { LichessOverlay.sync(); return; }   // SVG overlay owns lichess drawing
             // Use memoized board instead of querying selector every time
             if (!state.board) return;
             const root = ShadowKit.boardRoot(state.board);
@@ -1095,6 +1292,7 @@ const getMoveWinPct = (cp, mate) => {
             if (!vis) return;
             vis.isFading = true;
             clearInterval(vis.interval);
+            if (IS_LICHESS) { setTimeout(() => Visuals.remove(id), settings.visualDuration * 1000); LichessOverlay.sync(); return; }
             const fr = ShadowKit.boardRoot(state.board || document.querySelector(CONFIG.BOARD_SEL));
             const els = fr ? fr.querySelectorAll(`.${id}`) : [];
             els.forEach(el => {
@@ -1106,6 +1304,7 @@ const getMoveWinPct = (cp, mate) => {
         remove: (id) => {
             const idx = state.visuals.findIndex(v => v.id === id);
             if (idx !== -1) { clearInterval(state.visuals[idx].interval); state.visuals.splice(idx, 1); }
+            if (IS_LICHESS) { LichessOverlay.sync(); return; }
             const rr = ShadowKit.boardRoot(state.board || document.querySelector(CONFIG.BOARD_SEL));
             if (rr) rr.querySelectorAll(`.${id}`).forEach(el => el.remove());
 
@@ -1126,13 +1325,13 @@ const getMoveWinPct = (cp, mate) => {
         interval: null,
         lastMoves: [],
         update: (pvMoves) => {
-            if (IS_LICHESS) { PV.lastMoves = pvMoves || []; return; }   // no chess.com board DOM
             PV.lastMoves = pvMoves || [];
+            if (IS_LICHESS) { LichessOverlay.sync(); return; }   // SVG overlay owns lichess drawing
             if (!settings.showPVArrows) { PV.clear(); return; }
             PV.draw();
             if (!PV.interval) PV.interval = setInterval(PV.draw, 100);
         },
-        clear: () => { if (PV.interval) { clearInterval(PV.interval); PV.interval = null; } if (IS_LICHESS) return; const cr = ShadowKit.boardRoot(state.board || document.querySelector(CONFIG.BOARD_SEL)); if (cr) cr.querySelectorAll('.pv-arrow').forEach(el => el.remove()); },
+        clear: () => { if (PV.interval) { clearInterval(PV.interval); PV.interval = null; } if (IS_LICHESS) { LichessOverlay.sync(); return; } const cr = ShadowKit.boardRoot(state.board || document.querySelector(CONFIG.BOARD_SEL)); if (cr) cr.querySelectorAll('.pv-arrow').forEach(el => el.remove()); },
         draw: () => {
             state.board = document.querySelector(CONFIG.BOARD_SEL);
             if (!state.board) return;
@@ -1304,12 +1503,13 @@ const getMoveWinPct = (cp, mate) => {
         _els: null,
 
         create: () => {
+            if (IS_LICHESS) return;   // lichess uses the overlay's native-style bar (renderEval)
             injectEvalStyles();
             const board = state.board || document.querySelector(CONFIG.BOARD_SEL);
             if (!board) return;
 
             if (EvalBar.el) {
-                if (EvalBar._lastBoard === board && ShadowKit.root().contains(EvalBar.el)) return;
+                if (EvalBar._lastBoard === board && EvalBar.el.isConnected) return;
                 EvalBar.el.remove();
                 EvalBar.el = null;
             }
@@ -1343,11 +1543,12 @@ const getMoveWinPct = (cp, mate) => {
         },
 
         _cacheEls: () => {
-            const r = ShadowKit.root();
-            const ep = r.getElementById('custom-eval-top-block');
-            const bp = r.getElementById('custom-eval-bottom-block');
-            const tx = r.getElementById('custom-eval-text');
-            const kn = r.getElementById('custom-eval-knob');
+            const r = EvalBar.el;
+            if (!r) return;
+            const ep = r.querySelector('#custom-eval-top-block');
+            const bp = r.querySelector('#custom-eval-bottom-block');
+            const tx = r.querySelector('#custom-eval-text');
+            const kn = r.querySelector('#custom-eval-knob');
             if (ep && bp && tx) EvalBar._els = { top: ep, bottom: bp, text: tx, knob: kn };
         },
 
@@ -1390,10 +1591,12 @@ const getMoveWinPct = (cp, mate) => {
 
          update: (evalScore, mate) => {
              if (!settings.showEvalBar) return;
-             if (!EvalBar.el) EvalBar.create();
-             if (!EvalBar._els) EvalBar._cacheEls();
-            const els = EvalBar._els;
-            if (!els) return;
+             if (!IS_LICHESS) {
+                 if (!EvalBar.el) EvalBar.create();
+                 if (!EvalBar._els) EvalBar._cacheEls();
+                 if (!EvalBar._els) return;
+             }
+            const els = EvalBar._els || {};
 
             const playingAsVal = EvalBar.getPlayingAs();
             const playingAsBlack = playingAsVal === 2;
@@ -1402,13 +1605,15 @@ const getMoveWinPct = (cp, mate) => {
                 EvalBar._lastPlayingAs = playingAsVal;
             }
 
-            // Always sync bar colors
-            if (playingAsBlack) {
-                els.top.style.background    = 'linear-gradient(180deg, #fdfdfd 0%, #e6e6e6 60%, #d3d3d3 100%)';
-                els.bottom.style.background = 'linear-gradient(180deg, #2e2e2e 0%, #1b1b1b 60%, #101010 100%)';
-            } else {
-                els.top.style.background    = 'linear-gradient(180deg, #2e2e2e 0%, #1b1b1b 60%, #101010 100%)';
-                els.bottom.style.background = 'linear-gradient(180deg, #fdfdfd 0%, #e6e6e6 60%, #d3d3d3 100%)';
+            // Always sync bar colors (chess.com DOM bar; lichess renders its own)
+            if (!IS_LICHESS) {
+                if (playingAsBlack) {
+                    els.top.style.background    = 'linear-gradient(180deg, #fdfdfd 0%, #e6e6e6 60%, #d3d3d3 100%)';
+                    els.bottom.style.background = 'linear-gradient(180deg, #2e2e2e 0%, #1b1b1b 60%, #101010 100%)';
+                } else {
+                    els.top.style.background    = 'linear-gradient(180deg, #2e2e2e 0%, #1b1b1b 60%, #101010 100%)';
+                    els.bottom.style.background = 'linear-gradient(180deg, #fdfdfd 0%, #e6e6e6 60%, #d3d3d3 100%)';
+                }
             }
 
             let yourPct = 50;
@@ -1437,6 +1642,12 @@ const getMoveWinPct = (cp, mate) => {
                 if (Math.abs(score) >= 10) displayScore = (score > 0 ? '+' : '') + Math.round(score);
                 else if (Math.abs(score) >= 1) displayScore = (score > 0 ? '+' : '') + score.toFixed(1);
                 else displayScore = (score > 0 ? '+' : '') + score.toFixed(2);
+            }
+
+            if (IS_LICHESS) {
+                // The overlay's slim bar is the lichess rendering path.
+                LichessOverlay.renderEval(yourPct, displayScore);
+                return;
             }
 
             // yourPct = % of YOUR color (bottom block) — your color grows up from bottom
@@ -2467,7 +2678,7 @@ self.onmessage = function(e) {
                                 console.log(`[SF Engine] Found cached JS in IndexedDB (${cachedJs.length} chars)`);
                                 resolve(cachedJs);
                             } else {
-                                console.log(`[SF Engine] No cached JS, downloading from ${source.label}...`);
+                                console.log(`[SF Engine] No cached JS, ${source.bundled ? "loading bundled engine file (local extension file — no network)..." : `downloading from ${source.label}...`}`);
                                 xhrText(source.js, (js) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] JS downloaded (${js.length} chars), caching...`); writeCacheAsync(db, jsKey, js); resolve(js); }, reject);
                             }
                         });
@@ -2488,7 +2699,7 @@ self.onmessage = function(e) {
                                 console.log(`[SF Engine] Found cached WASM in IndexedDB (${cachedWasm.length} bytes)`);
                                 resolve(cachedWasm);
                             } else {
-                                console.log(`[SF Engine] No cached WASM, downloading from ${source.label}...`);
+                                console.log(`[SF Engine] No cached WASM, ${source.bundled ? "loading bundled engine file (local extension file — no network)..." : `downloading from ${source.label}...`}`);
                                 xhrBinary(source.wasm, (bytes) => { if (!isCurrentLoad()) return; console.log(`[SF Engine] WASM downloaded (${bytes.length} bytes), caching...`); writeCacheAsync(db, wasmKey, bytes); resolve(bytes); },
                                 (e) => { if (!isCurrentLoad()) return; reject(new Error(`WASM download failed: ${e.message || e}`)); },
                                 { sha256: source.sha256, timeoutMs: WASM_TIMEOUT_MS });
@@ -2700,7 +2911,7 @@ self.onmessage = function(e) {
             }
         }, watchdogMs + 2000);
         if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
-        if (settings.showEvalBar && !IS_LICHESS) EvalBar.reset();
+        if (settings.showEvalBar) EvalBar.reset();
         let delay;
         if (settings.bulletMode) {
             delay = 0;
@@ -2778,7 +2989,9 @@ self.onmessage = function(e) {
     function analyzeLocal(fen, depth, wasThinking = false) {
         console.log(`[SF Engine] analyzeLocal called: fen=${fen?.substring(0,40)}..., depth=${depth}, engineStatus=${state.engineStatus}, hasEngine=${!!state.localEngine}`);
     if (!state.localEngine || state.engineStatus !== "ready") {
-        console.warn(`[SF Engine] Cannot analyze: engine not ready (status=${state.engineStatus}, hasEngine=${!!state.localEngine})`);
+        // Handled: the FEN is stashed (pendingLocalFEN) and replayed after
+        // uciok — info-level so the brief load window doesn't read as an error.
+        console.log(`[SF Engine] Cannot analyze yet: engine not ready (status=${state.engineStatus}, hasEngine=${!!state.localEngine}) — will retry when ready`);
         state.isThinking = false;
         state.lastSanitizedBoardFEN = "";
         state.pendingLocalFEN = fen;
@@ -3098,7 +3311,7 @@ self.onmessage = function(e) {
         // ─── Threat Detection ── detect if opponent's last move created a threat
         // using the current analysis result. Only runs when it's our turn
         // (opponent just moved).
-        if (!IS_LICHESS && ThreatDetector.enabled && isOurTurnNow()) {
+        if (ThreatDetector.enabled && isOurTurnNow()) {
             // normEval/normMate are already "our perspective" (positive = good for us).
 
             let threatMove = '';
@@ -3117,10 +3330,12 @@ self.onmessage = function(e) {
             if (threatMove) {
                 ThreatDetector.threatMove = threatMove;
                 ThreatDetector.threatScore = threatScore;
-                ThreatDetector.show();
+                if (IS_LICHESS) LichessOverlay.sync();   // red arrow via the overlay
+                else ThreatDetector.show();
             } else {
                 // No threat anymore → clear stale highlight/score
-                ThreatDetector.reset();
+                if (IS_LICHESS) { ThreatDetector.threatMove = null; ThreatDetector.threatScore = null; LichessOverlay.sync(); }
+                else ThreatDetector.reset();
             }
         }
 
@@ -5172,7 +5387,7 @@ pvSettings: document.getElementById("pvSettings"),
             setupBoardObserver();
         }
         if (!IS_LICHESS) { try { HighlightObserver.ensure(); } catch (e) { console.error(`[SF Engine] HighlightObserver failed:`, e); } }
-        if (settings.showEvalBar && !IS_LICHESS) {
+        if (settings.showEvalBar) {
             try {
                 EvalBar.create();
                 EvalBar.updatePosition();
@@ -5196,7 +5411,7 @@ pvSettings: document.getElementById("pvSettings"),
         }
 
         if (state.board?.game && settings.autoRun && raw) {
-            if (settings.hideAfterMove && !IS_LICHESS && state.lastSeenFEN && clean !== state.lastSeenFEN) {
+            if (settings.hideAfterMove && state.lastSeenFEN && clean !== state.lastSeenFEN) {
                 try {
                     Visuals.removeByType('history'); Visuals.removeByType('analysis'); PV.clear();
                     // Reset threat highlight and eval bar on new board
