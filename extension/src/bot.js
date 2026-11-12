@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.9.1
+// @version          11.9.2
 // @description   An extremely advanced chess assistant for Chess.com and Lichess.org with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -651,9 +651,17 @@ const getMoveWinPct = (cp, mate) => {
     // Read path:  GET /game/export/{id}?moves=true (same-origin fetch; the
     //             session cookie carries auth) → players + UCI move list +
     //             status. The full FEN is computed locally by lichessUciToFEN.
+    //             Lichess routes a player's game page through the 12-char
+    //             GameFullId (GameId(8) + playerId(4)) but its export route is
+    //             /\w{8}/ — a live 12-char URL 404s on /game/export/ (verified
+    //             against conf/routes). Always export through the first 8
+    //             chars (GameFullId.gameId === GameId.take(8)) — identity for
+    //             legacy 8-char ids, correct for every live game.
     // Write path: a WebSocket.prototype.send probe captures the live round
-    //             socket (its keepalive ping fires every ~2.5s — the site
-    //             shadows nothing, so the prototype patch sees it). A move is
+    //             socket — player sockets are /play/{gameId}{playerId}/v6
+    //             (spectators use /watch/..., so the /play/ filter excludes
+    //             them). Its keepalive ping fires every ~2.5s and the site
+    //             shadows nothing, so the prototype patch sees it. A move is
     //             sent as the exact frame the site itself uses:
     //                 {"t":"move","d":{"u":"e2e4","a":<ackId>}}
     //             (verified live on lichess.org: the server accepts it, acks
@@ -737,11 +745,20 @@ const getMoveWinPct = (cp, mate) => {
         _moves: [], _fen: null, _status: null, _socks: [], _ack: 90000, _sentUci: "", _sentAt: 0,
         _pollTimer: null, _fail: 0, _lastErrLog: 0, _lastKickLen: -1, _board: null,
         _frameCount: 0, _lastFrameAt: 0, _lastKickFen: "",
+        // Top-level single-segment lichess routes (lila conf/routes) whose names
+        // are 8-12 chars and therefore LOOK like legacy game ids. Their boards
+        // (analysis/training/practice) are manipulable too, so they must never
+        // be mistaken for games — root URLs only; /game/{id} is always a game.
+        _nonGameRootWords: new Set(["analysis", "app-store", "broadcast", "challenge", "developers", "diagnostic", "features", "get-fishnet", "player-count", "practice", "streamer", "timeline", "tournament", "training", "verify-title"]),
         gameIdFromUrl() {
             // Game ids exist in 8-char (legacy) and 12-char (current) forms —
             // requiring exactly 8 silently broke every new live game!
             const m = location.pathname.match(/^\/(?:game\/)?([A-Za-z0-9]{8,12})(?:\/(?:white|black))?\/?$/);
-            return m ? m[1] : null;
+            if (!m) return null;
+            // Bare-root URLs are ambiguous: /analysis and /training match the id
+            // pattern but are pages (real games redirect to /game/{id}).
+            if (!/^\/game\//.test(location.pathname) && this._nonGameRootWords.has(m[1].toLowerCase())) return null;
+            return m[1];
         },
         // Cold-start position: parse chessground's rendered pieces (absolute px
         // transforms, board orientation from .cg-wrap). Returns the placement
@@ -968,7 +985,15 @@ const getMoveWinPct = (cp, mate) => {
             if (uci === this._sentUci && now - this._sentAt < 8000) return false;   // de-dupe retries
             this._socks = this._socks.filter((s) => s.readyState === 1);
             const id = this._gameId;
-            let ws = this._socks.find((s) => String(s.url).includes("/play/" + id + "/socket"));
+            // Player round sockets live at /play/{gameId}{playerId}/v6 — i.e.
+            // /play/{the 12-char FullId} for live games (8-char AI-game ids are
+            // just its prefix). There is NO "/socket" suffix (the old matcher
+            // only ever hit through the fallback below).
+            const id8 = id.slice(0, 8);
+            let ws = this._socks.find((s) => {
+                const u = String(s.url);
+                return u.includes("/play/" + id) || u.includes("/play/" + id8);
+            });
             if (!ws) ws = this._socks.find((s) => s.readyState === 1);
             if (!ws) { console.warn(`[SF Engine] Lichess: no round socket captured yet — cannot send ${uci}`); return false; }
             try {
@@ -992,7 +1017,10 @@ const getMoveWinPct = (cp, mate) => {
                 console.log(`[SF Engine] Lichess: game ${id} detected`);
             }
             try {
-                PAGE.fetch(`/game/export/${id}?moves=true`, { credentials: "same-origin", headers: { Accept: "application/x-ndjson" } })
+                // A live game's URL id is the 12-char GameFullId; the export
+                // route only matches \w{8} — see the header comment above.
+                const exportId = id.slice(0, 8);
+                PAGE.fetch(`/game/export/${exportId}?moves=true`, { credentials: "same-origin", headers: { Accept: "application/x-ndjson" } })
                     .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
                     .then((j) => {
                         this._fail = 0;
@@ -1062,9 +1090,45 @@ const getMoveWinPct = (cp, mate) => {
                             this._lastErrLog = Date.now();
                             console.log(`[SF Engine] Lichess: poll failed (${String(e && e.message || e).slice(0, 120)}) — retrying`);
                         }
+                        // A dead export must NEVER wedge the adapter: the board
+                        // DOM is the ground truth, so bootstrap from it and let
+                        // socket frames + DOM resnaps carry the game.
+                        this._bootstrapFromDOM();
                         finish(3000);
                     });
-            } catch (e) { finish(3000); }
+            } catch (e) { this._bootstrapFromDOM(); finish(3000); }
+        },
+        // DOM-only bootstrap — safety net for when /game/export cannot serve
+        // this game at all (rejected 12-char id, purged game, blocked fetch).
+        // Returns true when it (re)built a position.
+        _bootstrapFromDOM() {
+            try {
+                // A manipulable board means WE are the player; spectators and
+                // analysis pages must never be driven.
+                if (!document.querySelector(".cg-wrap.manipulable")) return false;
+                if (this._status !== "started") this._status = "started";
+                if (!this._myColor) {
+                    try {
+                        const wrap = document.querySelector(".cg-wrap");
+                        if (wrap && /orientation-(white|black)/.test(wrap.className)) this._myColor = /orientation-black/.test(wrap.className) ? "black" : "white";
+                    } catch (e) { }
+                }
+                const place = this._readPlacementFromDOM();
+                const modelPlace = this._fen ? this._fen.split(" ")[0] : null;
+                if (!place || place === modelPlace) return false;
+                let turn = this._readSideToMoveFromDOM();
+                // No last-move square and no model yet (cold start): White opens
+                // every standard game. Mid-game + ambiguous: keep the old model
+                // instead of guessing the wrong side to move.
+                if (!turn) turn = this._fen ? null : "w";
+                if (!turn) return false;
+                const rights = this._castlingFromPlacement(place);
+                const fen = place + " " + turn + " " + rights + " - 0 1";
+                if (fen === this._fen) return false;
+                this._fen = fen;
+                try { checkAndAnalyze(); } catch (e) { }
+                return true;
+            } catch (e) { return false; }
         },
         state() {
             return {
@@ -5801,7 +5865,10 @@ pvSettings: document.getElementById("pvSettings"),
             : ((typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) ? "extension" : "userscript");
         console.log(`[SF Engine] Chess AI Bot v${_buildVer} loaded (${_buildMode})`);
     } catch (e) {}
-    if (typeof GM_xmlhttpRequest === "function") {
+    if (typeof GM_xmlhttpRequest === "function" && !IS_LICHESS) {
+        // The install counter is skipped on lichess: its CSP connect-src
+        // blocks every external host, so the ping is a guaranteed console
+        // error (and unusable) there.
         let ver = "";
         try { if (typeof GM_info !== "undefined" && GM_info.script && GM_info.script.version) ver = String(GM_info.script.version); } catch (e) {}
         if (ver && GM_getValue("bot_instTracker", "") !== ver) {

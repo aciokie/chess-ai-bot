@@ -16,6 +16,7 @@ const FILES = [
     'mirror-workflow.test.js',
     'extension.test.js',
     'lichess-uci-fen.test.js',
+    'lichess-read-path.test.js',
 ];
 
 let failed = 0;

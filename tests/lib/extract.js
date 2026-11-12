@@ -38,9 +38,20 @@ function extractBalanced(text, openIndex) {
     let i = openIndex + 1;
     while (i < text.length && stack.length) {
         const c = text[i];
-        if (c === '"' || c === "'" || c === '`') { i = skipString(text, i); continue; }
-        if (c === '/' && text[i + 1] === '/') { const nl = text.indexOf('\n', i); i = nl === -1 ? text.length : nl + 1; continue; }
-        if (c === '/' && text[i + 1] === '*') { const end = text.indexOf('*/', i); i = end === -1 ? text.length : end + 2; continue; }
+        // Escaped slashes: a regex like /\/play\// contains the raw sequence
+        // "\/" + "/" (escaped slash touching the closing delimiter) — a naive
+        // "//" check swallows the rest of the line as a comment. A backslash
+        // directly before the pair can only be regex content at this level
+        // (strings are jumped over wholesale, so real code never has a bare
+        // backslash right before a comment or a quote).
+        const escaped = text[i - 1] === '\\';
+        // Comments are checked before quotes: an apostrophe or quote inside a
+        // comment (e.g. "the player's board") must not start a fake string and
+        // skip real code. A "//" inside a real string is never reached because
+        // we jump over strings wholesale when their opening quote is scanned.
+        if (!escaped && c === '/' && text[i + 1] === '/') { const nl = text.indexOf('\n', i); i = nl === -1 ? text.length : nl + 1; continue; }
+        if (!escaped && c === '/' && text[i + 1] === '*') { const end = text.indexOf('*/', i); i = end === -1 ? text.length : end + 2; continue; }
+        if (!escaped && (c === '"' || c === "'" || c === '`')) { i = skipString(text, i); continue; }
         if (closers[c]) { stack.push(closers[c]); i++; continue; }
         if (c === stack[stack.length - 1]) { stack.pop(); i++; continue; }
         i++;
