@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.9.3
+// @version          11.9.4
 // @description   An extremely advanced chess assistant for Chess.com and Lichess.org with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -532,9 +532,56 @@ const TRACK_URL = "https://countapi.mileshilliard.com/api/v1/hit/chess-ai-bot-in
         return false;
     }
 
+    // ─── BACKGROUND-SAFE TIMERS ─────────────────────────────────────────────
+    // Chrome throttles MAIN-THREAD timers in hidden tabs (min 1s, then after
+    // ~5 hidden minutes "intensive throttling" allows as little as ONE wake-up
+    // per minute). That is why lichess automation crawled or stalled whenever
+    // the user alt-tabbed: an auto-move scheduled with wait=0 could fire a
+    // minute late, and the pre-analysis "glance" delay froze the pipeline
+    // until the user returned (or pressed Analyze). Web Worker timers are
+    // exempt from intensive throttling, so every timing-critical path (poll
+    // chain, auto-move, glance delay, send retries, rematch poll) goes through
+    // this shim; without Worker support it degrades to plain setTimeout.
+    const BgTimers = (() => {
+        let worker = null, nextId = 1;
+        const pending = new Map();
+        const make = () => {
+            if (worker) return true;
+            try {
+                const src = "self.onmessage=function(e){var d=e.data;if(d.t==='t'){setTimeout(function(){self.postMessage(d.id);},d.ms);}else{setInterval(function(){self.postMessage(d.id);},d.ms);}}";
+                const w = new Worker(URL.createObjectURL(new Blob([src], { type: "application/javascript" })));
+                w.onmessage = (e) => {
+                    const h = pending.get(e.data);
+                    if (!h) return;
+                    if (!h.repeat) pending.delete(e.data);
+                    try { h.fn(); } catch (err) { }
+                };
+                worker = w;
+                return true;
+            } catch (e) { worker = null; return false; }
+        };
+        const arm = (fn, ms, repeat) => {
+            if (!make()) {
+                const t = repeat ? setInterval(fn, ms) : setTimeout(fn, ms);
+                return { cancel: () => { try { if (repeat) clearInterval(t); else clearTimeout(t); } catch (e) { } } };
+            }
+            const id = nextId++;
+            pending.set(id, { fn, repeat });
+            try { worker.postMessage({ t: repeat ? "i" : "t", id, ms: Math.max(0, ms | 0) }); }
+            catch (e) { pending.delete(id); const t = setTimeout(fn, ms); return { cancel: () => clearTimeout(t) }; }
+            return { cancel: () => { pending.delete(id); } };
+        };
+        return {
+            setTimeout: (fn, ms) => arm(fn, ms, false),
+            setInterval: (fn, ms) => arm(fn, ms, true),
+        };
+    })();
+    // Accepts BOTH BgTimers handles and native timer ids.
+    const bgClear = (h) => { try { if (h && typeof h.cancel === "function") h.cancel(); else if (h) clearTimeout(h); } catch (e) { } };
+
 const scheduleAutoMove = (fn, delayMs) => {
-    if (state.pendingAutoMoveTimeout) clearTimeout(state.pendingAutoMoveTimeout);
-    state.pendingAutoMoveTimeout = setTimeout(() => {
+    if (state.pendingAutoMoveTimeout) bgClear(state.pendingAutoMoveTimeout);
+    state.pendingAutoMoveTimeout = BgTimers.setTimeout(() => {
         state.pendingAutoMoveTimeout = null;
         // Re-check it's still our turn at execution time (not just scheduling time)
         if (state.board?.game) {
@@ -859,6 +906,10 @@ const getMoveWinPct = (cp, mate) => {
                         this._fen = fen;
                     }
                     kicked = true;
+                    // A real move landed: re-open the analyze dedupe for the new
+                    // position unconditionally — however the model or the gate
+                    // got seeded, checkAndAnalyze can never wedge on this move.
+                    try { state.lastSanitizedBoardFEN = ""; } catch (e) { }
                 }
                 // Instant reaction: don't wait for the next poll tick (this is
                 // the difference between a snappy bot and a "so slow" one).
@@ -1021,8 +1072,8 @@ const getMoveWinPct = (cp, mate) => {
             } catch (e) { console.error(`[SF Engine] Lichess: send failed`, e); return false; }
         },
         _schedule(ms) {
-            clearTimeout(this._pollTimer);
-            this._pollTimer = setTimeout(() => this._poll(), ms);
+            bgClear(this._pollTimer);
+            this._pollTimer = BgTimers.setTimeout(() => this._poll(), ms);   // worker timer: survives background throttling
         },
         _poll() {
             const finish = (ms) => { this._schedule(ms); };
@@ -3036,7 +3087,7 @@ self.onmessage = function(e) {
                 updateUI();
             }
         }, watchdogMs + 2000);
-        if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
+        if (state.pendingAutoMoveTimeout) { bgClear(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
         if (settings.showEvalBar) EvalBar.reset();
         let delay;
         if (settings.bulletMode) {
@@ -3085,9 +3136,10 @@ self.onmessage = function(e) {
                             }
                             // Add extra randomness (±50-150ms) to book moves for more human feel
                             bookDelay += getRandomInt(50, 150);
+                            if (document.hidden) bookDelay = 0;   // background: play at full speed, nobody is watching the "human" timing
                             state.moveTargetTime = performance.now() + bookDelay;
                             updateUI();
-                            state.pendingAnalysis = setTimeout(() => {
+                            state.pendingAnalysis = BgTimers.setTimeout(() => {
                                 state.pendingAnalysis = null;
                                 try {
                                     processBestMove(bookMove, 0, null, [bookMove], null, bookDelay / 1000, 0, true, finalFEN);
@@ -3170,6 +3222,10 @@ self.onmessage = function(e) {
         updateUI();
     }
     function handleLocalMessage(e) {
+        // Any worker traffic proves the engine is alive AND working — the
+        // analysis watchdog uses this timestamp to tell a stalled search from
+        // a busy one.
+        state.lastEngineOutputAt = performance.now();
         // Object messages: the worker posts the COMPILED module once per worker
         // ({__type:"module", module}) so repeat loads skip the 4-5s wasm compile.
         if (e.data && typeof e.data === "object" && e.data.__type === "module" && e.data.module) {
@@ -3758,7 +3814,7 @@ function triggerAutoMove(fen = null) {
                 state.lastMoveResult = `⏳ Waiting for the round socket… (${state._lichessSendRetries}/6)`;
                 if (state._lichessSendRetries === 1) console.warn(`[SF Engine] Lichess: move not sent yet (round socket pending): ${move}`);
                 if (state._lichessSendRetries <= 6) {
-                    setTimeout(() => { try { playMove(move, analyzedFEN); } catch (e) { } }, 1200);
+                    BgTimers.setTimeout(() => { try { playMove(move, analyzedFEN); } catch (e) { } }, 1200);
                 } else {
                     console.warn(`[SF Engine] Lichess: gave up sending ${move} after 6 attempts — is the round socket blocked?`);
                 }
@@ -5515,8 +5571,8 @@ pvSettings: document.getElementById("pvSettings"),
         state.lastCompletedAnalysisFEN = "";
         state._stallHealAt = 0;
         state.lastMoveResult = "N/A";
-        if (state.pendingAnalysis) { clearTimeout(state.pendingAnalysis); state.pendingAnalysis = null; }
-        if (state.pendingAutoMoveTimeout) { clearTimeout(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
+        if (state.pendingAnalysis) { bgClear(state.pendingAnalysis); state.pendingAnalysis = null; }
+        if (state.pendingAutoMoveTimeout) { bgClear(state.pendingAutoMoveTimeout); state.pendingAutoMoveTimeout = null; }
         if (state.rematchTimeout) { clearTimeout(state.rematchTimeout); state.rematchTimeout = null; }
         state.rematchAttempted = false;
         state._justResetForNewGame = true;
@@ -5544,6 +5600,40 @@ pvSettings: document.getElementById("pvSettings"),
         // Single FEN read shared by new-game detection + the analyze trigger
         const raw = state.board?.game ? getRawBoardFEN() : null;
         const clean = raw ? sanitizeFEN(raw) : "";
+
+        // ─── Analysis watchdog ──────────────────────────────────────────────
+        // A search that never reports back (worker hiccup, a 'stop' whose
+        // bestmove echo got lost, or any wedged flag) used to leave automation
+        // dead until the user pressed Analyze — the "it hangs and I have to
+        // click Analyze every time" report. Two tiers, driven by engine-output
+        // recency only (info lines stream continuously during a healthy
+        // search, so 20s of total silence is a stall, not a slow search):
+        //   >20s silent → reset the pipeline and re-dispatch an analysis;
+        //   >60s silent since the last reset → terminate + rebuild the worker.
+        if (state.isThinking) {
+            const silentFor = performance.now() - Math.max(state.lastEngineOutputAt || 0, state.analysisStartTime || 0);
+            const sinceReset = performance.now() - (state._watchdogResetAt || 0);
+            if (silentFor > 60000 && sinceReset > 55000) {
+                state._watchdogResetAt = performance.now();
+                console.warn(`[SF Engine] analysis watchdog: engine silent for ${Math.round(silentFor / 1000)}s — restarting the worker`);
+                state.isThinking = false;
+                try { if (state.localEngine) { state.localEngine.onerror = null; state.localEngine.terminate(); } } catch (e) { }
+                state.localEngine = null;
+                state.engineLoadingInProgress = false;
+                if (state.engineHeartbeatTimer) { clearInterval(state.engineHeartbeatTimer); state.engineHeartbeatTimer = null; }
+                try { loadLocalEngine(); } catch (e) { }
+            } else if (silentFor > 20000 && sinceReset > 18000) {
+                state._watchdogResetAt = performance.now();
+                console.warn(`[SF Engine] analysis watchdog: no engine output for ${Math.round(silentFor / 1000)}s — resetting the search`);
+                state.isThinking = false;
+                state.pendingAbortEchoes = (state.pendingAbortEchoes || 0) + 1;
+                try { if (state.localEngine) state.localEngine.postMessage("stop"); } catch (e) { }
+                if (isOurTurnNow() && state.localEngine && state.engineStatus === "ready") {
+                    state.lastSanitizedBoardFEN = "";
+                    try { analyze(settings.depth); } catch (e) { }
+                }
+            }
+        }
 
         // Detect a brand-new game (board back to the starting position) and clear any
         // transient analysis state left over from the previous game. Gated so it fires
@@ -5596,9 +5686,11 @@ pvSettings: document.getElementById("pvSettings"),
             if (isTurn && clean !== state.lastSanitizedBoardFEN) {
                 // Subtle anti-cheat: rarely skip analysis start (short pause)
                 if (!state.pendingAnalysis && !shouldPauseAnalysis()) {
-                    // Brief human-glance delay before analyzing starts
-                    const glanceMs = settings.bulletMode ? 0 : getRandomInt(400, 1200);
-                    state.pendingAnalysis = setTimeout(() => {
+                    // Brief human-glance delay before analyzing starts — skipped
+                    // in background tabs: nobody is watching, and visibility
+                    // throttling would otherwise stack on top of it.
+                    const glanceMs = (settings.bulletMode || document.hidden) ? 0 : getRandomInt(400, 1200);
+                    state.pendingAnalysis = BgTimers.setTimeout(() => {
                         state.pendingAnalysis = null;
                         try {
                             analyze(settings.depth);
@@ -5634,7 +5726,7 @@ pvSettings: document.getElementById("pvSettings"),
 
     function scheduleBackupPoll() {
         const delay = getRandomInt(CONFIG.BACKUP_POLL_MIN_MS, CONFIG.BACKUP_POLL_MAX_MS);
-        setTimeout(() => {
+        BgTimers.setTimeout(() => {
             try { checkAndAnalyze(); }
             catch (e) { console.error(`[SF Engine] backup poll failed:`, e); }
             scheduleBackupPoll();
@@ -5642,8 +5734,8 @@ pvSettings: document.getElementById("pvSettings"),
     }
 
     function startGameOverPoll() {
-        if (state.gameOverPollTimeout) clearTimeout(state.gameOverPollTimeout);
-        state.gameOverPollTimeout = setTimeout(() => {
+        if (state.gameOverPollTimeout) bgClear(state.gameOverPollTimeout);
+        state.gameOverPollTimeout = BgTimers.setTimeout(() => {
             try {
                 if (settings.autoRematch) attemptRematch();
             } catch (e) { console.error(`[SF Engine] game-over poll failed:`, e); }
@@ -5897,6 +5989,15 @@ pvSettings: document.getElementById("pvSettings"),
 
     // Lichess: start the platform adapter (socket capture + state polling).
     if (IS_LICHESS) { try { Lichess.init(); } catch (e) { console.error(`[SF Engine] Lichess init failed:`, e); } }
+
+    // Background-tab catch-up: browsers throttle hidden-tab timers hard, so the
+    // instant the tab becomes visible again, kick the pipeline instead of
+    // waiting for the next (possibly minute-long) throttled tick.
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible") return;
+        try { checkAndAnalyze(); } catch (e) { }
+        if (IS_LICHESS) { try { Lichess._poll(); } catch (e) { } }
+    });
 
     // Initial check
     checkAndAnalyze();

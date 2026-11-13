@@ -195,6 +195,33 @@ check('engine load defers on WASM-blocked lichess pages (CSP gate)',
     src.includes("this page's CSP blocks WASM (no unsafe-eval)") && /cspMeta && !\/unsafe-eval\/\.test\(cspMeta\.content\)/.test(src), true);
 check('per-info UI work is throttled (8Hz panel/overlay refresh)',
     src.includes('state._lastInfoUiAt') && src.includes('if (uiDue) updateUI();'), true);
+
+// ── background-tab immunity (v11.9.4) ─────────────────────────────────────
+// Hidden tabs get their MAIN-THREAD timers clamped (down to once/minute under
+// intensive throttling) — the poll chain, auto-move, glance delay and send
+// retries must all run on worker timers, or alt-tabbing stalls the bot.
+check('poll chain uses a background-safe timer',
+    src.includes('this._pollTimer = BgTimers.setTimeout(() => this._poll(), ms);'), true);
+check('auto-move + glance delay + send retry use background-safe timers',
+    src.includes('state.pendingAutoMoveTimeout = BgTimers.setTimeout(') &&
+    src.includes('state.pendingAnalysis = BgTimers.setTimeout(') &&
+    /BgTimers\.setTimeout\(\(\) => \{ try \{ playMove\(move, analyzedFEN\); \} catch \(e\) \{ \} \}, 1200\);/.test(src), true);
+check('BgTimers declares a plain-setTimeout fallback',
+    src.includes('const BgTimers = (() => {') && src.includes('repeat ? setInterval(fn, ms) : setTimeout(fn, ms)'), true);
+check('visibility return kicks the pipeline immediately',
+    src.includes('document.addEventListener("visibilitychange"') && /if \(document\.visibilityState !== "visible"\) return;/.test(src), true);
+check('background suppresses humanizer delays (glance + book)',
+    /const glanceMs = \(settings\.bulletMode \|\| document\.hidden\) \? 0 : getRandomInt\(400, 1200\);/.test(src) &&
+    src.includes('if (document.hidden) bookDelay = 0;'), true);
+
+// ── analysis watchdog (v11.9.4): never wedge until a manual Analyze click ──
+check('engine output recency is tracked for the watchdog',
+    src.includes('state.lastEngineOutputAt = performance.now();'), true);
+check('watchdog resets a silent search and restarts a dead worker',
+    src.includes('analysis watchdog: no engine output for') &&
+    src.includes('analysis watchdog: engine silent for'), true);
+check('move frames re-open the analyze dedupe unconditionally',
+    src.includes('try { state.lastSanitizedBoardFEN = ""; } catch (e) { }'), true);
 check('playMove retries lichess sends while the socket is pending', /state\._lichessSendRetries/.test(src) && /setTimeout\(\(\) => \{ try \{ playMove\(move, analyzedFEN\); \} catch \(e\) \{ \} \}, 1200\);/.test(src), true);
 
 console.log('\n' + (failures ? failures + ' lichess read-path check(s) FAILED' : 'All lichess read-path checks passed'));
