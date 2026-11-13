@@ -151,5 +151,51 @@ resetSend('r97K4Zr3I6i0', []);
 check('sendMove reports failure when no socket is captured', Lichess.sendMove('e2e4'), false);
 check('no legacy "/socket" suffix matcher remains', /\+ "\/socket"/.test(src), false);
 
+// ── socket capture (the 11.9.2 "no round socket captured yet" bug) ────────
+// The probes only ADD to the shared registry; _socks must be re-synced from
+// it (init used to be the only sync point — i.e. before the round socket had
+// sent its first keepalive ping — so sendMove never found a socket).
+class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 1; this.sent = []; }
+    send(d) { this.sent.push(d); }
+}
+sandbox.PAGE = { WebSocket: FakeWS };
+Lichess._socks = [];
+
+// (1) A socket that already existed BEFORE the patch (the real-world case:
+// the site creates it during page boot, the bot loads at document-idle).
+const pre = new FakeWS('wss://socket.lichess.org/play/FY4ABNVTMub4/v6');
+Lichess.patchSockets();                    // probes installed; registry still empty
+pre.send('p');                             // lichess keepalive ping → send probe captures it
+resetSend('FY4ABNVTMub4', Lichess._socks);
+check('pre-existing round socket captured by the ping probe', sandbox.PAGE.__sfLichSocks.includes(pre), true);
+check('capture is adopted on the next sendMove (no init re-run)', Lichess.sendMove('e2e4'), true);
+check('captured socket received the move frame', pre.sent.includes(JSON.stringify({ t: 'move', d: { u: 'e2e4', a: 90001 } })), true);
+
+// (2) Sockets created AFTER the patch are captured at construction.
+const constructed = new sandbox.PAGE.WebSocket('wss://socket.lichess.org/play/NEWGAME1234/v6');
+check('constructor proxy registers new sockets immediately', sandbox.PAGE.__sfLichSocks.includes(constructed), true);
+check('constructor proxy still returns a real WebSocket (instanceof holds)', constructed instanceof FakeWS, true);
+
+// (3) Spectator (/watch/) sockets must never be adopted or driven.
+const watcher = new sandbox.PAGE.WebSocket('wss://socket.lichess.org/watch/FY4ABNVT/white/v6');
+Lichess._socks = [];
+Lichess._syncSockets();
+check('spectator /watch/ socket is never adopted', Lichess._socks.includes(watcher), false);
+check('round socket is adopted by _syncSockets', Lichess._socks.includes(pre), true);
+
+// (4) Patching is idempotent (sibling instances / repeated calls).
+const wrapped = sandbox.PAGE.WebSocket;
+Lichess.patchSockets();
+check('patchSockets is idempotent (no double-wrapping)', sandbox.PAGE.WebSocket === wrapped, true);
+
+check('poll ticks re-sync sockets from the registry', /this\._syncSockets\(\);   \/\/ the round socket may have been captured/.test(src), true);
+check('sendMove re-syncs sockets before searching', /this\._syncSockets\(\);   \/\/ adopt anything captured since the last tick/.test(src), true);
+check('engine load defers on WASM-blocked lichess pages (CSP gate)',
+    src.includes("this page's CSP blocks WASM (no unsafe-eval)") && /cspMeta && !\/unsafe-eval\/\.test\(cspMeta\.content\)/.test(src), true);
+check('per-info UI work is throttled (8Hz panel/overlay refresh)',
+    src.includes('state._lastInfoUiAt') && src.includes('if (uiDue) updateUI();'), true);
+check('playMove retries lichess sends while the socket is pending', /state\._lichessSendRetries/.test(src) && /setTimeout\(\(\) => \{ try \{ playMove\(move, analyzedFEN\); \} catch \(e\) \{ \} \}, 1200\);/.test(src), true);
+
 console.log('\n' + (failures ? failures + ' lichess read-path check(s) FAILED' : 'All lichess read-path checks passed'));
 process.exit(failures ? 1 : 0);

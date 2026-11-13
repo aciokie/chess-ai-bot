@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.9.2
+// @version          11.9.3
 // @description   An extremely advanced chess assistant for Chess.com and Lichess.org with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -898,8 +898,28 @@ const getMoveWinPct = (cp, mate) => {
                 const proto = WS.prototype;
                 // Shared registry: another bot instance (userscript+extension
                 // coexistence, or a sibling version) may have installed its own
-                // send wrapper already — sockets must be visible to EVERYTHING.
+                // wrappers already — sockets must be visible to EVERYTHING.
                 const shared = PAGE.__sfLichSocks = PAGE.__sfLichSocks || [];
+                // 1) Constructor capture: every socket created after this point
+                //    lands in the registry immediately (lichess reconnects build
+                //    fresh WebSocket objects). The trap returns the real socket,
+                //    so the site sees zero behavioural change.
+                if (!PAGE.__sfWsCtorSf11) {
+                    try {
+                        PAGE.__sfWsCtorSf11 = true;
+                        const Orig = WS;
+                        PAGE.WebSocket = new Proxy(Orig, {
+                            construct(target, args) {
+                                const ws = Reflect.construct(target, args);
+                                try { if (shared.indexOf(ws) === -1) shared.push(ws); } catch (e) { }
+                                return ws;
+                            }
+                        });
+                    } catch (e) { PAGE.__sfWsCtorSf11 = false; }
+                }
+                // 2) Send probe: catches sockets that already existed BEFORE this
+                //    patch. Lichess pings ('p') over the round socket every ~2.5s,
+                //    so any live round socket lands in the registry within seconds.
                 if (!proto.__sfPatchedSf11) {
                     const origSend = proto.send;
                     proto.send = function (data) {
@@ -910,10 +930,25 @@ const getMoveWinPct = (cp, mate) => {
                     };
                     proto.__sfPatchedSf11 = true;
                 }
-                // Adopt every known round socket (existing + future).
+                this._syncSockets();
+            } catch (e) { }
+        },
+        // Adopt every PLAYER round socket (/play/) from the shared registry into
+        // _socks. This was the gap that kept live games dead in 11.9.x: the
+        // probes only ever ADD to the registry, and _socks was synced once at
+        // init — i.e. BEFORE the round socket's first ping frame — so sendMove
+        // never found a socket ("no round socket captured yet", forever).
+        // Called from init, every poll tick, and each send attempt.
+        _syncSockets() {
+            try {
+                const shared = PAGE.__sfLichSocks || [];
                 for (const s of shared) {
                     try {
-                        if (!this._socks.includes(s)) this._socks.push(s);
+                        if (!/\/play\//.test(String(s.url || ""))) continue;   // spectator /watch/ sockets must never send
+                        if (!this._socks.includes(s)) {
+                            this._socks.push(s);
+                            console.log(`[SF Engine] Lichess: round socket captured (${String(s.url).replace(/^[a-z]+:\/\//i, "").split("?")[0]})`);
+                        }
                         this._hookSocketMessages(s);
                     } catch (e) { }
                 }
@@ -983,6 +1018,7 @@ const getMoveWinPct = (cp, mate) => {
             if (!uci || uci.length < 4) return false;
             const now = Date.now();
             if (uci === this._sentUci && now - this._sentAt < 8000) return false;   // de-dupe retries
+            this._syncSockets();   // adopt anything captured since the last tick
             this._socks = this._socks.filter((s) => s.readyState === 1);
             const id = this._gameId;
             // Player round sockets live at /play/{gameId}{playerId}/v6 — i.e.
@@ -995,7 +1031,15 @@ const getMoveWinPct = (cp, mate) => {
                 return u.includes("/play/" + id) || u.includes("/play/" + id8);
             });
             if (!ws) ws = this._socks.find((s) => s.readyState === 1);
-            if (!ws) { console.warn(`[SF Engine] Lichess: no round socket captured yet — cannot send ${uci}`); return false; }
+            if (!ws) {
+                // Throttled: the capture probe can lag the first send by up to
+                // one ping cycle (~2.5s); callers retry, so don't spam.
+                if (!this._missLogAt || now - this._missLogAt > 5000) {
+                    this._missLogAt = now;
+                    console.warn(`[SF Engine] Lichess: round socket not captured yet — cannot send ${uci} (will retry)`);
+                }
+                return false;
+            }
             try {
                 ws.send(JSON.stringify({ t: "move", d: { u: uci, a: ++this._ack } }));
                 this._sentUci = uci; this._sentAt = now;
@@ -1011,6 +1055,7 @@ const getMoveWinPct = (cp, mate) => {
             const id = this.gameIdFromUrl();
             if (!id) { this._gameId = null; this._fen = null; this._moves = []; this._status = null; return finish(4000); }
             if (!this._accountId) this.detectIdentity();
+            this._syncSockets();   // the round socket may have been captured since the last tick
             if (id !== this._gameId) {
                 this._gameId = id; this._moves = []; this._fen = null; this._myColor = null;
                 this._status = "loading"; this._lastKickLen = -1;
@@ -2607,6 +2652,23 @@ self.onmessage = function(e) {
         state.lastSanitizedBoardFEN = "";
         return;
     }
+        // Lichess pages other than live games (home, lobby, the waiting/challenge
+        // screen, settings, …) ship a CSP without 'unsafe-eval', so WebAssembly
+        // can never instantiate there. Attempting a load anyway was toxic: the
+        // worker heartbeat kept a "worker alive … (compiling)" loop running for
+        // as long as the tab stayed open, and the self-heal happily re-downloaded
+        // engines on a page that can never compile them — the single biggest
+        // "lichess feels so slow" contributor observed. Defer to a game page
+        // (every lichess navigation is a fresh document that re-runs this loader).
+        if (IS_LICHESS) {
+            try {
+                const cspMeta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+                if (cspMeta && !/unsafe-eval/.test(cspMeta.content)) {
+                    console.log(`[SF Engine] Lichess: engine load deferred — this page's CSP blocks WASM (no unsafe-eval); live game pages allow it`);
+                    return;
+                }
+            } catch (e) { }
+        }
         const loadGeneration = ++state.engineLoadGeneration;
         const isCurrentLoad = () => state.engineLoadGeneration === loadGeneration;
         console.log(`[SF Engine] loadLocalEngine START`);
@@ -3305,10 +3367,17 @@ self.onmessage = function(e) {
                     const evalVal = type === "mate" ? val : parseFloat(state.localEval);
                     const statusData = getEvalStatusData(evalVal, type === "mate");
                     const duration = ((performance.now() - state.analysisStartTime) / 1000).toFixed(2);
+                    // Throttle the heavy per-info UI (PV arrows / lichess SVG
+                    // overlay / panel DOM) to ~8Hz: the engine streams dozens of
+                    // info lines per second and each one rebuilt the whole
+                    // overlay — a major cause of page jank on lichess. The final
+                    // bestmove path (processBestMove) always refreshes unthrottled.
+                    const uiNow = performance.now();
+                    const uiDue = uiNow - (state._lastInfoUiAt || 0) > 120;
+                    if (uiDue) state._lastInfoUiAt = uiNow;
                     if (pv) {
                         const best = pv.split(" ")[0];
-                        Visuals.add(best, 'analysis');
-                        PV.update(state.currentPV);
+                        if (uiDue) { Visuals.add(best, 'analysis'); PV.update(state.currentPV); }
                         state.lastMoveResult = `⏳ D${depth}: <span style="font-weight:bold; color:var(--bot-primary);">${best}</span>`;
                     }
                     state.lastLiveResult = `
@@ -3319,7 +3388,7 @@ self.onmessage = function(e) {
                             </div>
                             <span style="font-size:0.7em; color:#aaa; font-weight:normal;">(${duration}s)</span>
                         </div>`;
-                    updateUI();
+                    if (uiDue) updateUI();
                 }
             }
         }
@@ -3739,11 +3808,25 @@ function triggerAutoMove(fen = null) {
         if (state.board.game.lichessSendMove) {   // lichess: send the move frame over the captured round socket
             const sent = state.board.game.lichessSendMove(move);
             if (sent) {
+                state._lichessSendRetries = 0;
                 state.lastMoveResult = `✅ Sent ${move}`;
                 console.log(`[SF Engine] Lichess: sent ${move}`);
                 updateUI();
             } else {
-                console.warn(`[SF Engine] Lichess: move not sent (socket not captured yet): ${move}`);
+                // The capture probe can lag the first send by one ping cycle
+                // (~2.5s). Retry briefly, bounded, so the opening move can't
+                // stall — playMove's own guards re-verify turn + board before
+                // anything actually goes out.
+                if (state._lichessSendRetryFEN !== analyzedFEN) { state._lichessSendRetryFEN = analyzedFEN; state._lichessSendRetries = 0; }
+                state._lichessSendRetries = (state._lichessSendRetries || 0) + 1;
+                state.lastMoveResult = `⏳ Waiting for the round socket… (${state._lichessSendRetries}/6)`;
+                if (state._lichessSendRetries === 1) console.warn(`[SF Engine] Lichess: move not sent yet (round socket pending): ${move}`);
+                if (state._lichessSendRetries <= 6) {
+                    setTimeout(() => { try { playMove(move, analyzedFEN); } catch (e) { } }, 1200);
+                } else {
+                    console.warn(`[SF Engine] Lichess: gave up sending ${move} after 6 attempts — is the round socket blocked?`);
+                }
+                updateUI();
             }
             return;
         }
