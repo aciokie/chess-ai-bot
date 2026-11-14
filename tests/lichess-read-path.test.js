@@ -189,6 +189,36 @@ const wrapped = sandbox.PAGE.WebSocket;
 Lichess.patchSockets();
 check('patchSockets is idempotent (no double-wrapping)', sandbox.PAGE.WebSocket === wrapped, true);
 
+// (5) Self-healing capture: if another script replaces PAGE.WebSocket AFTER
+// the patch (a lichess analyzer extension, a stale instance), the next sync
+// must re-wrap the replacement — this exact blind spot once lasted a whole
+// game ("round socket not captured yet" with a healthy socket).
+class HijackWS {
+    constructor(url) { this.url = url; this.readyState = 1; this.sent = []; }
+    send(d) { this.sent.push(d); }
+}
+sandbox.PAGE.WebSocket = HijackWS;
+Lichess._socks = [];
+Lichess._syncSockets();
+check('hijacked constructor is re-wrapped on the next sync', sandbox.PAGE.WebSocket !== HijackWS, true);
+check('the re-wrap is a real proxy (construct still yields the socket)', (() => { try { return new HijackWS('wss://socket.lichess.org/play/X/v6') instanceof HijackWS; } catch (e) { return false; } })(), true);
+const healed = new sandbox.PAGE.WebSocket('wss://socket.lichess.org/play/HEAL1234abcd/v6');
+check('sockets built through the healed constructor are registered', sandbox.PAGE.__sfLichSocks.includes(healed), true);
+resetSend('HEAL1234abcd', [healed]);
+check('sendMove works again after the self-heal', Lichess.sendMove('d2d4'), true);
+
+// (6) Pre-existing hijack sockets: the send probe is re-armed on the CURRENT
+// prototype too, so a socket that escaped the constructor stays capturable.
+const rogue = new HijackWS('wss://socket.lichess.org/play/ROGUE5678efgh/v6');
+sandbox.PAGE.__sfLichSocks.length = 0;   // pretend it was never registered
+rogue.send('p');                          // its next ping must register it
+check('a rogue socket is captured by the re-armed send probe', sandbox.PAGE.__sfLichSocks.includes(rogue), true);
+resetSend('ROGUE5678efgh', [rogue]);
+check('sendMove reaches the rogue socket after capture', Lichess.sendMove('e2e4'), true);
+
+check('capture instruments self-verify every sync', src.includes('PAGE.__sfProxySf11 !== cur'), true);
+check('capture diagnostics are emitted after repeated misses', src.includes('capture diagnostics — ctorProxy='), true);
+
 check('poll ticks re-sync sockets from the registry', /this\._syncSockets\(\);   \/\/ the round socket may have been captured/.test(src), true);
 check('sendMove re-syncs sockets before searching', /this\._syncSockets\(\);   \/\/ adopt anything captured since the last tick/.test(src), true);
 check('engine load defers on WASM-blocked lichess pages (CSP gate)',

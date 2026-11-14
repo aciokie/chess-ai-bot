@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name Chess AI Bot afst
 // @namespace http://tampermonkey.net/
-// @version          11.9.4
+// @version          11.9.5
 // @description   An extremely advanced chess assistant for Chess.com and Lichess.org with 8 Stockfish models (19.0.0 to 9.0), tons of powerful features, and countless customization options.
 // @author        Ech0
 // @author        ACIOKIEPRO
@@ -943,61 +943,83 @@ const getMoveWinPct = (cp, mate) => {
             } catch (e) { }
         },
         patchSockets() {
+            // The real work lives in _ensureCapture() and self-re-verifies on
+            // every sync; kept for API compatibility (init calls it).
+            this._syncSockets();
+        },
+        // Install / RE-VERIFY the socket-capture instruments. Runs on EVERY
+        // _syncSockets() — i.e. every poll tick and every send attempt —
+        // because the instruments can be invalidated underneath us: another
+        // extension (a lichess analyzer, etc.) or a stale bot instance can
+        // replace window.WebSocket AFTER our patch, which blinded capture for
+        // a whole game ("round socket not captured yet" with a perfectly
+        // healthy socket). Self-healing here means that can't persist.
+        //   * constructor Proxy — every socket created after this point lands
+        //     in the shared registry immediately (lichess reconnects build
+        //     fresh WebSocket objects; the trap returns the real socket so the
+        //     site sees zero behavioural change);
+        //   * send probe on the CURRENT constructor's prototype — catches the
+        //     round socket that already existed before the patch (lichess pings
+        //     'p' over it every ~2.5s), and instance sends that resolve through
+        //     this prototype (subclass wrappers included).
+        _ensureCapture() {
             try {
-                const WS = PAGE.WebSocket;
-                if (!WS || !WS.prototype) return;
-                const proto = WS.prototype;
-                // Shared registry: another bot instance (userscript+extension
-                // coexistence, or a sibling version) may have installed its own
-                // wrappers already — sockets must be visible to EVERYTHING.
                 const shared = PAGE.__sfLichSocks = PAGE.__sfLichSocks || [];
-                // 1) Constructor capture: every socket created after this point
-                //    lands in the registry immediately (lichess reconnects build
-                //    fresh WebSocket objects). The trap returns the real socket,
-                //    so the site sees zero behavioural change.
-                if (!PAGE.__sfWsCtorSf11) {
+                // 1) Constructor proxy — ours unless someone replaced it since
+                //    the last check (then we wrap the replacement).
+                const cur = PAGE.WebSocket;
+                if (cur && cur.prototype && PAGE.__sfProxySf11 !== cur) {
                     try {
-                        PAGE.__sfWsCtorSf11 = true;
-                        const Orig = WS;
-                        PAGE.WebSocket = new Proxy(Orig, {
+                        const proxy = new Proxy(cur, {
                             construct(target, args) {
                                 const ws = Reflect.construct(target, args);
                                 try { if (shared.indexOf(ws) === -1) shared.push(ws); } catch (e) { }
                                 return ws;
                             }
                         });
-                    } catch (e) { PAGE.__sfWsCtorSf11 = false; }
+                        PAGE.__sfProxySf11 = proxy;
+                        PAGE.__sfWsCtorSf11 = true;   // legacy flag name (sibling instances may read it)
+                        PAGE.WebSocket = proxy;
+                    } catch (e) { }
                 }
-                // 2) Send probe: catches sockets that already existed BEFORE this
-                //    patch. Lichess pings ('p') over the round socket every ~2.5s,
-                //    so any live round socket lands in the registry within seconds.
-                if (!proto.__sfPatchedSf11) {
-                    const origSend = proto.send;
-                    proto.send = function (data) {
-                        try {
-                            if (/\/play\//.test(String(this.url || "")) && shared.indexOf(this) === -1) shared.push(this);
-                        } catch (e) { }
-                        return origSend.apply(this, arguments);
-                    };
-                    proto.__sfPatchedSf11 = true;
+                // 2) Send probe on the live constructor's prototype. The
+                //    registry is re-read lazily inside so a replaced
+                //    PAGE.__sfLichSocks array can never strand a wrapper.
+                const proto = PAGE.WebSocket && PAGE.WebSocket.prototype;
+                if (proto && !proto.__sfPatchedSf11) {
+                    try {
+                        const origSend = proto.send;
+                        proto.send = function (data) {
+                            try {
+                                if (/\/play\//.test(String(this.url || ""))) {
+                                    const sh = PAGE.__sfLichSocks = PAGE.__sfLichSocks || [];
+                                    if (sh.indexOf(this) === -1) sh.push(this);
+                                }
+                            } catch (e) { }
+                            return origSend.apply(this, arguments);
+                        };
+                        proto.__sfPatchedSf11 = true;
+                    } catch (e) { }
                 }
-                this._syncSockets();
             } catch (e) { }
         },
         // Adopt every PLAYER round socket (/play/) from the shared registry into
-        // _socks. This was the gap that kept live games dead in 11.9.x: the
-        // probes only ever ADD to the registry, and _socks was synced once at
-        // init — i.e. BEFORE the round socket's first ping frame — so sendMove
-        // never found a socket ("no round socket captured yet", forever).
+        // _socks, re-arming the capture instruments first. This was the gap that
+        // kept live games dead in 11.9.x: the probes only ever ADD to the
+        // registry, and _socks was synced once at init — i.e. BEFORE the round
+        // socket's first ping frame — so sendMove never found a socket ("no
+        // round socket captured yet", forever). Never only sync adoption at init.
         // Called from init, every poll tick, and each send attempt.
         _syncSockets() {
             try {
+                this._ensureCapture();
                 const shared = PAGE.__sfLichSocks || [];
                 for (const s of shared) {
                     try {
                         if (!/\/play\//.test(String(s.url || ""))) continue;   // spectator /watch/ sockets must never send
                         if (!this._socks.includes(s)) {
                             this._socks.push(s);
+                            this._missCount = 0;
                             console.log(`[SF Engine] Lichess: round socket captured (${String(s.url).replace(/^[a-z]+:\/\//i, "").split("?")[0]})`);
                         }
                         this._hookSocketMessages(s);
@@ -1084,16 +1106,29 @@ const getMoveWinPct = (cp, mate) => {
             if (!ws) ws = this._socks.find((s) => s.readyState === 1);
             if (!ws) {
                 // Throttled: the capture probe can lag the first send by up to
-                // one ping cycle (~2.5s); callers retry, so don't spam.
+                // one ping cycle (~2.5s); callers retry, so don't spam. After a
+                // few misses the capture state is dumped so the broken link in
+                // the chain (proxy replaced? probe stripped? registry empty?)
+                // is visible in one log line.
+                this._missCount = (this._missCount || 0) + 1;
                 if (!this._missLogAt || now - this._missLogAt > 5000) {
                     this._missLogAt = now;
                     console.warn(`[SF Engine] Lichess: round socket not captured yet — cannot send ${uci} (will retry)`);
+                }
+                if (this._missCount === 3 || this._missCount % 30 === 0) {
+                    try {
+                        const reg = PAGE.__sfLichSocks || [];
+                        const known = reg.map((s) => String(s.url || "").replace(/^[a-z]+:\/\//i, "").split("?")[0]).slice(0, 4).join(" | ") || "empty";
+                        const wsProto = PAGE.WebSocket && PAGE.WebSocket.prototype;
+                        console.warn(`[SF Engine] Lichess: capture diagnostics — ctorProxy=${PAGE.__sfProxySf11 ? "ours" : "not ours"}, sendProbe=${wsProto && wsProto.__sfPatchedSf11 ? "ok" : "MISSING"}, registry(${reg.length}): ${known}, adopted=${this._socks.length}`);
+                    } catch (e) { }
                 }
                 return false;
             }
             try {
                 ws.send(JSON.stringify({ t: "move", d: { u: uci, a: ++this._ack } }));
                 this._sentUci = uci; this._sentAt = now;
+                this._missCount = 0;
                 return true;
             } catch (e) { console.error(`[SF Engine] Lichess: send failed`, e); return false; }
         },
@@ -3880,7 +3915,7 @@ function triggerAutoMove(fen = null) {
                 if (state._lichessSendRetries <= 6) {
                     BgTimers.setTimeout(() => { try { playMove(move, analyzedFEN); } catch (e) { } }, 1200);
                 } else {
-                    console.warn(`[SF Engine] Lichess: gave up sending ${move} after 6 attempts — is the round socket blocked?`);
+                    console.warn(`[SF Engine] Lichess: gave up sending ${move} after 6 attempts — check the capture diagnostics above; if lichess itself shows "Reconnecting" the site's socket is down (wait), otherwise refresh the tab (F5) so the current extension build re-injects`);
                 }
                 updateUI();
             }
